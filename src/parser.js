@@ -145,6 +145,7 @@
       this.buffer.push(token);
       let progressed = false;
       let awaitedChar = false;
+      const awaitingMotionChar = this.awaitingCharFor === 'motion';
 
       // Consider commands when no operator or text object is in progress,
       // but do NOT consider commands if a motion is awaiting a char (e.g., after 'f').
@@ -166,21 +167,25 @@
       }
 
       if (!this.haveOperator) {
-        const nextOp = this.operatorNode.children.get(token);
-        if (nextOp) {
-          this.operatorNode = nextOp; progressed = true;
-          if (nextOp.meta && nextOp.meta.type === 'operator') {
-            this.haveOperator = true; this.operatorMeta = nextOp.meta;
-            this.motionNode = this.motionsRoot; this.textObjNode = this.textObjectsRoot;
-            const selfStep = this._stepSelfTrie(token, true);
-            progressed = progressed || selfStep.progressed;
+        if (!awaitingMotionChar) {
+          const nextOp = this.operatorNode.children.get(token);
+          if (nextOp) {
+            this.operatorNode = nextOp; progressed = true;
+            if (nextOp.meta && nextOp.meta.type === 'operator') {
+              this.haveOperator = true; this.operatorMeta = nextOp.meta;
+              this.motionNode = this.motionsRoot; this.textObjNode = this.textObjectsRoot;
+              const selfStep = this._stepSelfTrie(token, true);
+              progressed = progressed || selfStep.progressed;
+            }
+          } else {
+            this.operatorNode = this.operatorsRoot;
           }
-        } else {
-          this.operatorNode = this.operatorsRoot;
         }
       } else {
-        const selfStep = this._stepSelfTrie(token, false);
-        progressed = progressed || selfStep.progressed;
+        if (!awaitingMotionChar) {
+          const selfStep = this._stepSelfTrie(token, false);
+          progressed = progressed || selfStep.progressed;
+        }
       }
 
       const steppedMotion = this._stepMotionTrie(token);
