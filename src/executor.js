@@ -358,7 +358,7 @@
   // Precise scanner over Docs selection using safe peeks
   class GDocsNavigator {
     constructor() {
-      this.MAX_SCAN = 512;
+      this.MAX_SCAN = 2048;
     }
     getSelAndRange() {
       const iframe = document.querySelector('.docs-texteventtarget-iframe');
@@ -416,13 +416,21 @@
     }
 
     moveRightBy(n, withShift) {
+      if (n <= 0) return;
+      const { sel } = this.getSelAndRange();
+      if (!sel) return;
+      const action = withShift ? 'extend' : 'move';
       for (let i = 0; i < n; i++) {
-        sendKeyEvent('right', { shift: withShift });
+        sel.modify(action, 'forward', 'character');
       }
     }
     moveLeftBy(n, withShift) {
+      if (n <= 0) return;
+      const { sel } = this.getSelAndRange();
+      if (!sel) return;
+      const action = withShift ? 'extend' : 'move';
       for (let i = 0; i < n; i++) {
-        sendKeyEvent('left', { shift: withShift });
+        sel.modify(action, 'backward', 'character');
       }
     }
 
@@ -531,7 +539,7 @@
           if (n > this.MAX_SCAN) break;
         }
         sel.removeAllRanges(); sel.addRange(range);
-        return Math.max(n - 1, 0);
+        return n;
       }
       // Fallback string-based computation
       try {
@@ -807,35 +815,55 @@
       else if (left && rev[left]) { cur = left; dir = 'left'; opener = rev[left]; closer = left; offsetLeft = 1; }
       else return false;
 
+      const { sel, range } = this.getSelAndRange();
+      if (!sel || !range) return false;
+
       if (dir === 'right') {
-        // scan right with stack
-        let depth = 0; let n = 0; let guard = 0;
-        while (true) {
-          const ch = this.peekRightCharN(n + 1);
-          if (ch == null) return false;
+        // scan right with stack using incremental selection
+        sel.removeAllRanges(); sel.addRange(range);
+        let depth = 0; let n = 0; let prevLen = 0;
+        for (let guard = 0; guard < this.MAX_SCAN; guard++) {
+          sel.modify('extend', 'forward', 'character');
+          const s = sel.toString(); const curLen = s.length || 0;
+          if (curLen <= prevLen) break;
+          const ch = s.charAt(s.length - 1);
           n++;
           if (ch === opener) depth++;
           else if (ch === closer) {
             depth--;
-            if (depth === 0) { this.moveRightBy(n, withShift); return true; }
+            if (depth === 0) {
+              sel.removeAllRanges(); sel.addRange(range);
+              this.moveRightBy(n, withShift);
+              return true;
+            }
           }
-          if (++guard > this.MAX_SCAN) break;
+          prevLen = curLen;
         }
+        sel.removeAllRanges(); sel.addRange(range);
       } else {
-        // scan left with stack
-        let depth = 0; let n = 0; let guard = 0;
-        while (true) {
-          const ch = this.peekLeftCharN(n + 1);
-          if (ch == null) return false;
+        // scan left with stack using incremental selection
+        sel.removeAllRanges(); sel.addRange(range);
+        let depth = 0; let n = 0; let prevLen = 0;
+        for (let guard = 0; guard < this.MAX_SCAN; guard++) {
+          sel.modify('extend', 'backward', 'character');
+          const s = sel.toString(); const curLen = s.length || 0;
+          if (curLen <= prevLen) break;
+          const ch = s.charAt(0);
           n++;
           if (ch === closer) depth++;
           else if (ch === opener) {
             depth--;
-            if (depth === 0) { this.moveLeftBy(n - offsetLeft, withShift); return true; }
+            if (depth === 0) {
+              sel.removeAllRanges(); sel.addRange(range);
+              this.moveLeftBy(n - offsetLeft, withShift);
+              return true;
+            }
           }
-          if (++guard > this.MAX_SCAN) break;
+          prevLen = curLen;
         }
+        sel.removeAllRanges(); sel.addRange(range);
       }
+      return false;
     }
 
     // Compute absolute caret index from document start using DOM traversal.
@@ -1266,10 +1294,18 @@
           repeat(count, () => Adapter.down(S)); break;
         case 'line_start': Adapter.home(S); break;
         case 'first_non_blank': {
-          // Move to start of current line by scanning left to previous newline
-          const toLineStart = nav.prevLineBoundaryDelta();
-          if (toLineStart > 0) nav.moveLeftBy(toLineStart, withShift);
-          // Then skip over whitespace to first non-blank (single-pass scan)
+          // Move to start of current visual line (respects wrapping)
+          Adapter.home({ shift: withShift });
+          // Then skip over whitespace to first non-blank
+          const d = nav.firstNonBlankForwardDelta();
+          if (d > 0) nav.moveRightBy(d, withShift);
+          break; }
+        case 'first_non_blank_down': {
+          // In Vim, _ with count n moves down n-1 lines then to first non-blank
+          if (count > 1) repeat(count - 1, () => Adapter.down(S));
+          // Move to start of current visual line (respects wrapping)
+          Adapter.home({ shift: withShift });
+          // Then skip over whitespace to first non-blank
           const d = nav.firstNonBlankForwardDelta();
           if (d > 0) nav.moveRightBy(d, withShift);
           break; }
@@ -1510,26 +1546,36 @@
 
     selectQuote(q, includeDelim) {
       // left quote
-      let left = 0; let guard = 0; let foundL = false;
-      while (true) {
-        const ch = this.nav.peekLeftCharN(left + 1);
-        if (ch == null) break;
+      const { sel, range } = this.nav.getSelAndRange();
+      if (!sel || !range) return false;
+      sel.removeAllRanges(); sel.addRange(range);
+      let left = 0; let prevLen = 0; let foundL = false;
+      for (let guard = 0; guard < this.nav.MAX_SCAN; guard++) {
+        sel.modify('extend', 'backward', 'character');
+        const s = sel.toString(); const curLen = s.length || 0;
+        if (curLen <= prevLen) break;
+        const ch = s.charAt(0);
         if (ch === q) { foundL = true; break; }
-        left++;
-        if (++guard > this.nav.MAX_SCAN) break;
+        left++; prevLen = curLen;
       }
+      sel.removeAllRanges(); sel.addRange(range);
       if (!foundL) return false;
       this.nav.moveLeftBy(left, false);
       if (!includeDelim) this.nav.moveRightBy(1, false);
       // right quote
-      let right = 0; guard = 0; let foundR = false;
-      while (true) {
-        const ch = this.nav.peekRightCharN(right + 1);
-        if (ch == null) break;
+      const sr2 = this.nav.getSelAndRange();
+      if (!sr2.sel || !sr2.range) return false;
+      sr2.sel.removeAllRanges(); sr2.sel.addRange(sr2.range);
+      let right = 0; prevLen = 0; let foundR = false;
+      for (let guard = 0; guard < this.nav.MAX_SCAN; guard++) {
+        sr2.sel.modify('extend', 'forward', 'character');
+        const s = sr2.sel.toString(); const curLen = s.length || 0;
+        if (curLen <= prevLen) break;
+        const ch = s.charAt(s.length - 1);
         if (ch === q) { foundR = true; break; }
-        right++;
-        if (++guard > this.nav.MAX_SCAN) break;
+        right++; prevLen = curLen;
       }
+      sr2.sel.removeAllRanges(); sr2.sel.addRange(sr2.range);
       if (!foundR) return false;
       this.nav.moveRightBy(includeDelim ? (right + 1) : right, true);
       return true;
@@ -1538,57 +1584,80 @@
     selectParagraph(around) {
       // Find blank line boundaries (\n\n) or start/end of document
       const nav = this.nav;
+      const { sel, range } = nav.getSelAndRange();
+      if (!sel || !range) return false;
+      
       // Move to first non-blank of current line as anchor
       const toLineStart = nav.prevLineBoundaryDelta();
-      if (toLineStart > 0) nav.moveLeftBy(toLineStart, false);
-      // Scan left to blank line
-      let left = 0; let guard = 0; let prevNL = false; let hitLeft = false;
-      while (true) {
-        const ch = nav.peekLeftCharN(left + 1);
-        if (ch == null) { hitLeft = true; break; }
+      if (toLineStart > 0) {
+        for (let i = 0; i < toLineStart; i++) sel.modify('move', 'backward', 'character');
+      }
+      
+      // Scan left to blank line, extending selection backwards
+      sel.collapseToStart();
+      let prevLen = 0; let prevNL = false;
+      for (let guard = 0; guard < nav.MAX_SCAN; guard++) {
+        sel.modify('extend', 'backward', 'character');
+        const s = sel.toString(); const curLen = s.length || 0;
+        if (curLen <= prevLen) break;
+        const ch = s.charAt(0);
         if (ch === '\n') {
-          if (prevNL) { left--; break; }
+          if (prevNL) {
+            // Hit double newline - back up one and stop
+            sel.modify('extend', 'forward', 'character');
+            break;
+          }
           prevNL = true;
         } else {
           prevNL = false;
         }
-        left++;
-        if (++guard > nav.MAX_SCAN) break;
+        prevLen = curLen;
       }
-      if (left > 0) nav.moveLeftBy(left, false);
+      
+      // Now selection extends from paragraph start to current position
+      // Collapse to start (paragraph beginning)
+      sel.collapseToStart();
+      
       // inner: skip any leading blank lines
       if (!around) {
-        let d = 0; guard = 0;
-        while (true) {
-          const ch = nav.peekRightCharN(d + 1);
-          if (ch == null) break;
-          if (ch !== '\n') break;
-          d++;
-          if (++guard > nav.MAX_SCAN) break;
+        prevLen = 0;
+        for (let guard = 0; guard < nav.MAX_SCAN; guard++) {
+          sel.modify('extend', 'forward', 'character');
+          const s = sel.toString(); const curLen = s.length || 0;
+          if (curLen <= prevLen) break;
+          const ch = s.charAt(s.length - 1);
+          if (ch !== '\n') {
+            // Hit non-newline, back up and stop
+            sel.modify('extend', 'backward', 'character');
+            break;
+          }
+          prevLen = curLen;
         }
-        if (d > 0) nav.moveRightBy(d, false);
+        sel.collapseToEnd();
       }
-      // Scan right to blank line
-      let right = 0; guard = 0; prevNL = false;
-      while (true) {
-        const ch = nav.peekRightCharN(right + 1);
-        if (ch == null) break;
+      
+      // Scan right to blank line, extending selection forwards
+      prevLen = 0; prevNL = false;
+      for (let guard = 0; guard < nav.MAX_SCAN; guard++) {
+        sel.modify('extend', 'forward', 'character');
+        const s = sel.toString(); const curLen = s.length || 0;
+        if (curLen <= prevLen) break;
+        const ch = s.charAt(s.length - 1);
         if (ch === '\n') {
-          if (prevNL) { right--; break; }
+          if (prevNL) {
+            if (!around) {
+              // For inner, exclude the blank line
+              sel.modify('extend', 'backward', 'character');
+            }
+            break;
+          }
           prevNL = true;
         } else {
           prevNL = false;
         }
-        right++;
-        if (++guard > nav.MAX_SCAN) break;
+        prevLen = curLen;
       }
-      if (around) {
-        // include trailing newline(s)
-        this.nav.moveRightBy(right + 1, true);
-      } else {
-        // exclude trailing blank line
-        this.nav.moveRightBy(Math.max(right, 0), true);
-      }
+      
       return true;
     }
 
@@ -1596,25 +1665,35 @@
       const isEnd = (ch) => ch === '.' || ch === '!' || ch === '?';
       const nav = this.nav;
       // Scan left to previous sentence end
-      let left = 0; let guard = 0;
-      while (true) {
-        const ch = nav.peekLeftCharN(left + 1);
-        if (ch == null) break;
-        if (isEnd(ch)) { break; }
-        left++;
-        if (++guard > nav.MAX_SCAN) break;
+      const { sel, range } = nav.getSelAndRange();
+      if (!sel || !range) return false;
+      sel.removeAllRanges(); sel.addRange(range);
+      let left = 0; let prevLen = 0;
+      for (let guard = 0; guard < nav.MAX_SCAN; guard++) {
+        sel.modify('extend', 'backward', 'character');
+        const s = sel.toString(); const curLen = s.length || 0;
+        if (curLen <= prevLen) break;
+        const ch = s.charAt(0);
+        if (isEnd(ch)) break;
+        left++; prevLen = curLen;
       }
+      sel.removeAllRanges(); sel.addRange(range);
       if (left > 0) nav.moveLeftBy(left, false);
       if (!around && nav.peekLeftCharN(1) && isEnd(nav.peekLeftCharN(1))) nav.moveRightBy(1, false);
       // Scan right to next sentence end
-      let right = 0; guard = 0;
-      while (true) {
-        const ch = nav.peekRightCharN(right + 1);
-        if (ch == null) break;
-        right++;
+      const sr2 = nav.getSelAndRange();
+      if (!sr2.sel || !sr2.range) return false;
+      sr2.sel.removeAllRanges(); sr2.sel.addRange(sr2.range);
+      let right = 0; prevLen = 0;
+      for (let guard = 0; guard < nav.MAX_SCAN; guard++) {
+        sr2.sel.modify('extend', 'forward', 'character');
+        const s = sr2.sel.toString(); const curLen = s.length || 0;
+        if (curLen <= prevLen) break;
+        right++; prevLen = curLen;
+        const ch = s.charAt(s.length - 1);
         if (isEnd(ch)) break;
-        if (++guard > nav.MAX_SCAN) break;
       }
+      sr2.sel.removeAllRanges(); sr2.sel.addRange(sr2.range);
       if (around) this.nav.moveRightBy(right + 1, true); else this.nav.moveRightBy(right, true);
       return true;
     }
@@ -1674,33 +1753,53 @@
     }
 
     findEnclosingOpenDelta(open, close) {
-      let depth = 0; let i = 0; let guard = 0;
-      while (true) {
-        const ch = this.nav.peekLeftCharN(i + 1);
-        if (ch == null) return null;
+      const { sel, range } = this.nav.getSelAndRange();
+      if (!sel || !range) return null;
+      sel.removeAllRanges(); sel.addRange(range);
+      let depth = 0; let i = 0; let prevLen = 0;
+      for (let guard = 0; guard < this.nav.MAX_SCAN; guard++) {
+        sel.modify('extend', 'backward', 'character');
+        const s = sel.toString(); const curLen = s.length || 0;
+        if (curLen <= prevLen) break;
+        const ch = s.charAt(0);
         i++;
         if (ch === close) depth++;
         else if (ch === open) {
-          if (depth === 0) return i;
+          if (depth === 0) {
+            sel.removeAllRanges(); sel.addRange(range);
+            return i;
+          }
           depth--;
         }
-        if (++guard > this.nav.MAX_SCAN) return null;
+        prevLen = curLen;
       }
+      sel.removeAllRanges(); sel.addRange(range);
+      return null;
     }
 
     findMatchingCloseFromHere(open, close, includeDelims) {
-      let depth = 0; let i = 0; let guard = 0;
-      while (true) {
-        const ch = this.nav.peekRightCharN(i + 1);
-        if (ch == null) return null;
+      const { sel, range } = this.nav.getSelAndRange();
+      if (!sel || !range) return null;
+      sel.removeAllRanges(); sel.addRange(range);
+      let depth = 0; let i = 0; let prevLen = 0;
+      for (let guard = 0; guard < this.nav.MAX_SCAN; guard++) {
+        sel.modify('extend', 'forward', 'character');
+        const s = sel.toString(); const curLen = s.length || 0;
+        if (curLen <= prevLen) break;
+        const ch = s.charAt(s.length - 1);
         i++;
         if (ch === open) depth++;
         else if (ch === close) {
-          if (depth === 0) return includeDelims ? i : (i - 1);
+          if (depth === 0) {
+            sel.removeAllRanges(); sel.addRange(range);
+            return includeDelims ? i : (i - 1);
+          }
           depth--;
         }
-        if (++guard > this.nav.MAX_SCAN) return null;
+        prevLen = curLen;
       }
+      sel.removeAllRanges(); sel.addRange(range);
+      return null;
     }
 
     selectWholeLines(count) {

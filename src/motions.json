@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "settings": {
     "allowRegisterPrefix": true
   },
@@ -44,6 +44,7 @@
     { "id": "match_pair", "keys": ["%"] },
     { "id": "line_start", "keys": ["0"] },
     { "id": "first_non_blank", "keys": ["^"] },
+    { "id": "first_non_blank_down", "keys": ["_"], "acceptsCount": true },
     { "id": "line_end", "keys": ["$"], "acceptsCount": true },
     { "id": "last_non_blank", "keys": ["g","_"] },
     { "id": "first_line", "keys": ["g","g"], "countSemantic": "goto_line" },

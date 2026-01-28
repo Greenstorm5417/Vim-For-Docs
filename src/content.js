@@ -128,6 +128,43 @@
     document.documentElement.appendChild(script);
   }
 
+  function migrateConfig(stored, base) {
+    const storedVersion = stored.schemaVersion || 1;
+    const baseVersion = base.schemaVersion || 1;
+    if (storedVersion >= baseVersion) return stored;
+
+    log(`Migrating config from schema v${storedVersion} to v${baseVersion}`);
+    const migrated = JSON.parse(JSON.stringify(stored));
+    migrated.schemaVersion = baseVersion;
+
+    // Migration v1 -> v2: Add first_non_blank_down motion
+    if (storedVersion < 2) {
+      const hasMotion = (migrated.motions || []).some(m => m.id === 'first_non_blank_down');
+      if (!hasMotion) {
+        const baseMotion = (base.motions || []).find(m => m.id === 'first_non_blank_down');
+        if (baseMotion) {
+          migrated.motions = migrated.motions || [];
+          const insertIdx = migrated.motions.findIndex(m => m.id === 'line_end');
+          if (insertIdx >= 0) {
+            migrated.motions.splice(insertIdx, 0, baseMotion);
+          } else {
+            migrated.motions.push(baseMotion);
+          }
+          log('Added first_non_blank_down motion (_) during migration');
+        }
+      }
+    }
+
+    // Save migrated config back to storage
+    try {
+      API.storage.local.set({ motionsConfig: migrated });
+    } catch (e) {
+      console.warn('Failed to save migrated config', e);
+    }
+
+    return migrated;
+  }
+
   async function loadConfig() {
     try {
       const base = await window.loadVimMotionsConfig();
@@ -147,7 +184,8 @@
               if (!src) { resolve(base); return; }
               try {
                 const parsed = (typeof src === 'string') ? JSON.parse(src) : src;
-                resolve(parsed);
+                const migrated = migrateConfig(parsed, base);
+                resolve(migrated);
               } catch (e) {
                 console.warn('Invalid motionsConfig in storage, using base file', e);
                 resolve(base);

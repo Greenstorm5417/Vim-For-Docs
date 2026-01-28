@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Vim-For-Docs",
   "description": "An implementation of Vim motions for Google Docs",
-  "version": "2.2",
+  "version": "2.4",
   "permissions": ["storage"],
   "browser_specific_settings": {
     "gecko": {
