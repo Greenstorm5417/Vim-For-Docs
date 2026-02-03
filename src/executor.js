@@ -351,6 +351,8 @@
     },
     ctrlLeft: (opts={}) => sendKeyEvent('left', { ...opts, control: true }),
     ctrlRight: (opts={}) => sendKeyEvent('right', { ...opts, control: true }),
+    ctrlUp: (opts={}) => sendKeyEvent('up', { ...opts, control: true }),
+    ctrlDown: (opts={}) => sendKeyEvent('down', { ...opts, control: true }),
     ctrlHome: (opts={}) => sendKeyEvent('home', { ...opts, control: true }),
     ctrlEnd: (opts={}) => sendKeyEvent('end', { ...opts, control: true })
   };
@@ -1137,8 +1139,9 @@
   function repeat(n, fn) { for (let i = 0; i < (n || 1); i++) fn(i); }
 
   class MotionExecutor {
-    constructor(modeAPI) {
+    constructor(modeAPI, settingsAPI) {
       this.modeAPI = modeAPI;
+      this.settingsAPI = settingsAPI || { getUseDisplayLines: () => false };
       this.nav = new GDocsNavigator();
       this.lastFind = null; // { dir: 'right'|'left', target: 'x', till: boolean }
       this.vlDisp = null; // visual-line displacement counter
@@ -1282,10 +1285,24 @@
           break;
         case 'up':
           if (curMode === 'visualLine') { this.visualLineUp(count); break; }
-          repeat(count, () => Adapter.up(S)); break;
+          if (this.settingsAPI.getUseDisplayLines()) {
+            repeat(count, () => Adapter.up(S));
+          } else {
+            Adapter.right(S)
+            repeat(count, () => Adapter.ctrlUp(S));
+            Adapter.left(S);
+          }
+          break;
         case 'down':
           if (curMode === 'visualLine') { this.visualLineDown(count); break; }
-          repeat(count, () => Adapter.down(S)); break;
+          if (this.settingsAPI.getUseDisplayLines()) {
+            repeat(count, () => Adapter.down(S));
+          } else {
+            Adapter.right(S)
+            repeat(count, () => Adapter.ctrlDown(S));
+            Adapter.left(S);
+          }
+          break;
         case 'display_up':
           if (curMode === 'visualLine') { this.visualLineUp(count); break; }
           repeat(count, () => Adapter.up(S)); break;
@@ -1336,8 +1353,8 @@
         case 'till_next': { const ch=args.char; if (!ch) break; this.lastFind = { dir: 'right', target: ch, till: true }; for (let i=0;i<count;i++){ const d = nav.findRightDelta(ch, true); if (d>0) nav.moveRightBy(d, withShift);} break; }
         case 'find_prev': { const ch=args.char; if (!ch) break; this.lastFind = { dir: 'left', target: ch, till: false }; for (let i=0;i<count;i++){ const d = nav.findLeftDelta(ch, false); if (d>0) nav.moveLeftBy(d, withShift);} break; }
         case 'till_prev': { const ch=args.char; if (!ch) break; this.lastFind = { dir: 'left', target: ch, till: true }; for (let i=0;i<count;i++){ const d = nav.findLeftDelta(ch, true); if (d>0) nav.moveLeftBy(d, withShift);} break; }
-        case 'paragraph_fwd': Adapter.down(S); break;
-        case 'paragraph_back': Adapter.up(S); break;
+        case 'paragraph_fwd': repeat(count, () => Adapter.ctrlDown(S)); break;
+        case 'paragraph_back': repeat(count, () => Adapter.ctrlUp(S)); break;
         case 'scroll_top': scrollSelectionIntoView('top'); break;
         case 'scroll_center': scrollSelectionIntoView('center'); break;
         case 'scroll_bottom': scrollSelectionIntoView('bottom'); break;
@@ -1803,12 +1820,11 @@
     }
 
     selectWholeLines(count) {
-      Adapter.home({});
-      Adapter.end({ shift: true });
+      Adapter.ctrlUp({});
+      Adapter.ctrlDown({ shift: true });
       if (count > 1) {
-        repeat(count - 1, (i) => {
-          Adapter.down({ shift: true });
-          Adapter.end({ shift: true });
+        repeat(count - 1, () => {
+          Adapter.ctrlDown({ shift: true });
         });
       }
       this._lastSelType = 'line';
@@ -2553,7 +2569,7 @@
     }
   }
 
-  function createExecutor(modeAPI) { return new MotionExecutor(modeAPI); }
+  function createExecutor(modeAPI, settingsAPI) { return new MotionExecutor(modeAPI, settingsAPI); }
 
   window.createVimExecutor = createExecutor;
   

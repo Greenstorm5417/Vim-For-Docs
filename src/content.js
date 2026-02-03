@@ -4,6 +4,7 @@
 
   let parser = null;
   let debug = false;
+  let useDisplayLines = false;
   let executor = null;
   let mode = 'normal'; // normal | insert | visual | visualLine
   let tempNormal = false; // from <C-O>
@@ -168,11 +169,13 @@
   async function loadConfig() {
     try {
       const base = await window.loadVimMotionsConfig();
-      // Read debug flag from sync (small, sync-friendly)
+      // Read debug flag and useDisplayLines from sync (small, sync-friendly)
       try {
-        API.storage.sync.get(['debug'], (data) => {
+        API.storage.sync.get(['debug', 'useDisplayLines'], (data) => {
           debug = !!(data && data.debug);
+          useDisplayLines = !!(data && data.useDisplayLines);
           try { window.__VIM_DEBUG__ = debug; } catch (_) {}
+          try { window.__VIM_USE_DISPLAY_LINES__ = useDisplayLines; } catch (_) {}
         });
       } catch (_) {}
 
@@ -243,6 +246,10 @@
           if (changes && changes.debug) {
             try { debug = !!changes.debug.newValue; window.__VIM_DEBUG__ = debug; } catch (_) {}
             log('Debug changed via storage', debug);
+          }
+          if (changes && changes.useDisplayLines) {
+            try { useDisplayLines = !!changes.useDisplayLines.newValue; window.__VIM_USE_DISPLAY_LINES__ = useDisplayLines; } catch (_) {}
+            log('useDisplayLines changed via storage', useDisplayLines);
           }
           if (changes && changes.theme) {
             try { uiTheme = changes.theme.newValue || 'vim'; if (ui) ui.setTheme(uiTheme); } catch (_) {}
@@ -323,14 +330,16 @@
     try { if (ui) { ui.setTempNormal(!!tempNormal); ui.setMode(mode); ui.updateCursorStyle(); } } catch (_) {}
   }
   const modeAPI = {
-    setMode: setMode,
+    setMode: (m) => { setMode(m); },
     getMode: () => mode,
     isVisual: () => mode === 'visual' || mode === 'visualLine',
-    setReplaceMode: (v) => { replaceMode = !!v; },
     getReplaceMode: () => replaceMode
   };
+  const settingsAPI = {
+    getUseDisplayLines: () => useDisplayLines
+  };
   // Initialize executor early so it is available in init
-  executor = window.createVimExecutor(modeAPI);
+  executor = window.createVimExecutor(modeAPI, settingsAPI);
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);
