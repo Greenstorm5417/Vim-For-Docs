@@ -110,6 +110,7 @@
     { "id": "yank_to_eol", "keys": ["Y"], "modes": ["normal"], "acceptsCount": true },
     { "id": "delete_char", "keys": ["x"], "modes": ["normal"], "acceptsCount": true },
     { "id": "delete_char_back", "keys": ["X"], "modes": ["normal"], "acceptsCount": true },
+    { "id": "toggle_case_char", "keys": ["~"], "modes": ["normal"], "acceptsCount": true },
     { "id": "paste_after", "keys": ["p"], "modes": ["normal"], "acceptsCount": true },
     { "id": "paste_before", "keys": ["P"], "modes": ["normal"], "acceptsCount": true },
     { "id": "paste_after_cursor_stay", "keys": ["g","p"], "modes": ["normal"], "acceptsCount": true },

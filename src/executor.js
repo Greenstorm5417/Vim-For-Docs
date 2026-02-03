@@ -2017,6 +2017,17 @@
         }
         case 'delete_char': this.pushChangePosition(); repeat(count, () => Adapter.delete({})); this.setLastChange({ type: 'command', id: 'delete_char', count }); return;
         case 'delete_char_back': this.pushChangePosition(); repeat(count, () => Adapter.backspace({})); this.setLastChange({ type: 'command', id: 'delete_char_back', count }); return;
+        case 'toggle_case_char': {
+          this.pushChangePosition();
+          this._lastSelType = 'char';
+          repeat(count, () => Adapter.right({ shift: true }));
+          setTimeout(() => {
+            this.applyOperator('toggle_case', result.register);
+          }, 20);
+          setTimeout(() => Adapter.left({}), 20);
+          this.setLastChange({ type: 'command', id: 'toggle_case_char', count });
+          return;
+        }
 
         // Paste (uses internal registers; Docs-friendly insertion)
         case 'paste_after': { this.pasteFromRegister(result.register, { before: false, times: count }); this.setLastChange({ type: 'command', id: 'paste_after', count, register: result.register }); return; }
@@ -2275,9 +2286,11 @@
           return;
         }
         case 'visual_toggle_case': {
-          this._lastSelType = (this.modeAPI.getMode() === 'visualLine') ? 'line' : 'char';
+          const currentMode = this.modeAPI.getMode();
+          this._lastSelType = (currentMode === 'visualLine') ? 'line' : 'char';
           this.applyOperator('toggle_case', result.register);
-          this.modeAPI.setMode('normal');
+          // Stay in visual mode to allow repeated toggling
+          this.modeAPI.setMode(currentMode);
           this.setLastChange({ type: 'command', id: 'visual_toggle_case', count: 1 });
           return;
         }
