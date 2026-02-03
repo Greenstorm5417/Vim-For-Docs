@@ -156,6 +156,24 @@
       }
     }
 
+    // Migration v2 -> v3: Add toggle_case_char command
+    if (storedVersion < 3) {
+      const hasCommand = (migrated.commands || []).some(c => c.id === 'toggle_case_char');
+      if (!hasCommand) {
+        const baseCommand = (base.commands || []).find(c => c.id === 'toggle_case_char');
+        if (baseCommand) {
+          migrated.commands = migrated.commands || [];
+          const insertIdx = migrated.commands.findIndex(c => c.id === 'delete_char_back');
+          if (insertIdx >= 0) {
+            migrated.commands.splice(insertIdx + 1, 0, baseCommand);
+          } else {
+            migrated.commands.push(baseCommand);
+          }
+          log('Added toggle_case_char command (~) during migration');
+        }
+      }
+    }
+
     // Save migrated config back to storage
     try {
       API.storage.local.set({ motionsConfig: migrated });

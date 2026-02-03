@@ -1531,8 +1531,19 @@
 
     selectWordLike(kind, around) {
       const nav = this.nav;
-      const leftToStart = nav.prevStartDelta(kind);
-      if (leftToStart > 0) nav.moveLeftBy(leftToStart, false);
+      // Check if we're already at the start of a word
+      const charUnderCursor = nav.peekRightCharN(1);
+      const charBefore = nav.peekLeftCharN(1);
+      const isAtWordStart = charUnderCursor && nav.classify(charUnderCursor, kind) !== 'ws' &&
+                            (!charBefore || nav.classify(charBefore, kind) === 'ws' || 
+                             nav.classify(charBefore, kind) !== nav.classify(charUnderCursor, kind));
+      
+      // Only move left if we're not already at a word start
+      if (!isAtWordStart) {
+        const leftToStart = nav.prevStartDelta(kind);
+        if (leftToStart > 0) nav.moveLeftBy(leftToStart, false);
+      }
+      
       let rightToEnd = nav.nextEndDelta(kind);
       if (rightToEnd <= 0) return false;
       nav.moveRightBy(rightToEnd, true);
@@ -2533,7 +2544,12 @@
         const left = this.nav.peekLeftCharN(1);
         const right = this.nav.peekRightCharN(1);
         if (left && !this.nav.isWhitespace(left) && right && !this.nav.isWhitespace(right)) {
+          // Insert 2 spaces after sentence-ending punctuation (.!?)
+          const isSentenceEnd = left === '.' || left === '!' || left === '?';
           sendKeyEvent('space', {});
+          if (isSentenceEnd) {
+            sendKeyEvent('space', {});
+          }
         }
       }
     }
