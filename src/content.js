@@ -71,7 +71,7 @@
       try {
         // Insert mode handling: only intercept exits and temp-normal
         if (mode === 'insert') {
-          if (token === '<ESC>' || token === '<C-C>') {
+          if (token === '<ESC>' || token === '<C-C>' || token === '<C-[>') {
             e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
             setMode('normal'); replaceMode = false;
             return;
@@ -96,8 +96,8 @@
         // In non-insert modes, suppress all tokenized keys by default
         e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
 
-        // ESC should be exit mode regardless of current mode
-        if (token === '<ESC>') {
+        // ESC (or Ctrl+[) should be exit mode regardless of current mode
+        if (token === '<ESC>' || token === '<C-[>') {
           executor.exec({ kind: 'command', command: { id: 'exit_mode' }, count: 1 });
           return;
         }
