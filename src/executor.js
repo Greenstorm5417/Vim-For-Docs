@@ -1563,16 +1563,87 @@
 
     selectDelims(open, close, includeDelims) {
       const leftDist = this.findEnclosingOpenDelta(open, close);
-      if (leftDist == null) return false;
-      this.nav.moveLeftBy(leftDist, false);
-      if (!includeDelims) this.nav.moveRightBy(1, false);
+      if (leftDist != null) {
+        this.nav.moveLeftBy(leftDist, false);
+        if (!includeDelims) this.nav.moveRightBy(1, false);
+        const rightDist = this.findMatchingCloseFromHere(open, close, includeDelims);
+        if (rightDist == null) return false;
+        this.nav.moveRightBy(rightDist, true);
+        return true;
+      }
+      // Fallback: cursor is not currently inside a pair. Search forward for
+      // the next opening delimiter and operate on that pair (Vim-like
+      // behaviour for i)/i}/etc when the cursor sits before the pair).
+      const fwd = this.findCharForwardDelta(open);
+      if (fwd == null) return false;
+      // Position cursor at the open delim (includeDelims) or just past it.
+      this.nav.moveRightBy(includeDelims ? fwd : fwd + 1, false);
       const rightDist = this.findMatchingCloseFromHere(open, close, includeDelims);
       if (rightDist == null) return false;
       this.nav.moveRightBy(rightDist, true);
       return true;
     }
 
+    // Returns the number of characters between the cursor and the next
+    // occurrence of `target` (so `target` is the (delta+1)-th char to the
+    // right). Returns null if not found within MAX_SCAN.
+    findCharForwardDelta(target) {
+      const { sel, range } = this.nav.getSelAndRange();
+      if (!sel || !range) return null;
+      sel.removeAllRanges(); sel.addRange(range);
+      let n = 0; let prevLen = 0;
+      for (let guard = 0; guard < this.nav.MAX_SCAN; guard++) {
+        sel.modify('extend', 'forward', 'character');
+        const s = sel.toString(); const curLen = s.length || 0;
+        if (curLen <= prevLen) break;
+        const ch = s.charAt(s.length - 1);
+        if (ch === target) {
+          sel.removeAllRanges(); sel.addRange(range);
+          return n;
+        }
+        n++; prevLen = curLen;
+      }
+      sel.removeAllRanges(); sel.addRange(range);
+      return null;
+    }
+
+    // Match the user-typed quote char OR its Docs-smart curly counterparts.
+    // Google Docs auto-converts " -> U+201C/U+201D and ' -> U+2018/U+2019,
+    // so a literal === comparison would never find a quote in real documents.
+    quoteMatcher(q) {
+      if (q === '"') {
+        return (ch) => ch === '"' || ch === '\u201C' || ch === '\u201D' || ch === '\u201E' || ch === '\u201F';
+      }
+      if (q === "'") {
+        return (ch) => ch === "'" || ch === '\u2018' || ch === '\u2019' || ch === '\u201A' || ch === '\u201B';
+      }
+      return (ch) => ch === q;
+    }
+
+    // Like findCharForwardDelta but accepts a predicate so we can match any
+    // of several characters (used for smart-quote variants).
+    findPredForwardDelta(pred) {
+      const { sel, range } = this.nav.getSelAndRange();
+      if (!sel || !range) return null;
+      sel.removeAllRanges(); sel.addRange(range);
+      let n = 0; let prevLen = 0;
+      for (let guard = 0; guard < this.nav.MAX_SCAN; guard++) {
+        sel.modify('extend', 'forward', 'character');
+        const s = sel.toString(); const curLen = s.length || 0;
+        if (curLen <= prevLen) break;
+        const ch = s.charAt(s.length - 1);
+        if (pred(ch)) {
+          sel.removeAllRanges(); sel.addRange(range);
+          return n;
+        }
+        n++; prevLen = curLen;
+      }
+      sel.removeAllRanges(); sel.addRange(range);
+      return null;
+    }
+
     selectQuote(q, includeDelim) {
+      const isQ = this.quoteMatcher(q);
       // left quote
       const { sel, range } = this.nav.getSelAndRange();
       if (!sel || !range) return false;
@@ -1583,13 +1654,44 @@
         const s = sel.toString(); const curLen = s.length || 0;
         if (curLen <= prevLen) break;
         const ch = s.charAt(0);
-        if (ch === q) { foundL = true; break; }
+        if (isQ(ch)) { foundL = true; break; }
         left++; prevLen = curLen;
       }
       sel.removeAllRanges(); sel.addRange(range);
-      if (!foundL) return false;
+      if (!foundL) {
+        // Fallback: no opening quote behind the cursor. Look forward for
+        // the next quoted region and operate on it (matches Vim behaviour
+        // when the cursor sits before a quoted string on the line).
+        const fwd = this.findPredForwardDelta(isQ);
+        if (fwd == null) return false;
+        // Move past the opening quote so we're inside the quoted region.
+        this.nav.moveRightBy(fwd + 1, false);
+        const sr0 = this.nav.getSelAndRange();
+        if (!sr0.sel || !sr0.range) return false;
+        sr0.sel.removeAllRanges(); sr0.sel.addRange(sr0.range);
+        let right2 = 0; let pl = 0; let foundR2 = false;
+        for (let guard = 0; guard < this.nav.MAX_SCAN; guard++) {
+          sr0.sel.modify('extend', 'forward', 'character');
+          const s = sr0.sel.toString(); const curLen = s.length || 0;
+          if (curLen <= pl) break;
+          const ch = s.charAt(s.length - 1);
+          if (isQ(ch)) { foundR2 = true; break; }
+          right2++; pl = curLen;
+        }
+        sr0.sel.removeAllRanges(); sr0.sel.addRange(sr0.range);
+        if (!foundR2) return false;
+        if (includeDelim) {
+          // Step back over opening quote and extend through closing quote.
+          this.nav.moveLeftBy(1, false);
+          this.nav.moveRightBy(right2 + 2, true);
+        } else {
+          // Cursor already sits just past opening quote; extend to before close.
+          this.nav.moveRightBy(right2, true);
+        }
+        return true;
+      }
+
       this.nav.moveLeftBy(left, false);
-      if (!includeDelim) this.nav.moveRightBy(1, false);
       // right quote
       const sr2 = this.nav.getSelAndRange();
       if (!sr2.sel || !sr2.range) return false;
@@ -1600,12 +1702,21 @@
         const s = sr2.sel.toString(); const curLen = s.length || 0;
         if (curLen <= prevLen) break;
         const ch = s.charAt(s.length - 1);
-        if (ch === q) { foundR = true; break; }
+        if (isQ(ch)) { foundR = true; break; }
         right++; prevLen = curLen;
       }
       sr2.sel.removeAllRanges(); sr2.sel.addRange(sr2.range);
       if (!foundR) return false;
-      this.nav.moveRightBy(includeDelim ? (right + 1) : right, true);
+      if (includeDelim) {
+        // Step back over the opening quote, then extend forward through
+        // open + content + close (right + 2 chars).
+        this.nav.moveLeftBy(1, false);
+        this.nav.moveRightBy(right + 2, true);
+      } else {
+        // Cursor is already just past the opening quote; extend by `right`
+        // characters of inner content (stops just before the closing quote).
+        this.nav.moveRightBy(right, true);
+      }
       return true;
     }
 
@@ -2537,20 +2648,22 @@
       Adapter.end({});
       const d = this.nav.whitespaceForwardDelta();
       if (d <= 0) return;
-      this.nav.moveRightBy(d, true);
+      // Peek surrounding context BEFORE we mutate anything.
+      const left = this.nav.peekLeftCharN(1);
+      // Char immediately after the run of whitespace (first non-ws on next line)
+      const right = this.nav.peekRightCharN(d + 1);
       this.pushChangePosition();
-      document.execCommand('delete');
-      if (withSpace) {
-        const left = this.nav.peekLeftCharN(1);
-        const right = this.nav.peekRightCharN(1);
-        if (left && !this.nav.isWhitespace(left) && right && !this.nav.isWhitespace(right)) {
-          // Insert 2 spaces after sentence-ending punctuation (.!?)
-          const isSentenceEnd = left === '.' || left === '!' || left === '?';
-          sendKeyEvent('space', {});
-          if (isSentenceEnd) {
-            sendKeyEvent('space', {});
-          }
-        }
+      // Delete the line break + leading whitespace by pressing Delete d times.
+      // document.execCommand('delete') does not reach the Google Docs iframe,
+      // and `insertReplacementText` does not reliably collapse a selection
+      // that crosses a paragraph boundary in Docs, but Delete keys are
+      // handled directly by the editor.
+      for (let i = 0; i < d; i++) Adapter.delete({});
+      if (withSpace && left && !this.nav.isWhitespace(left) && right && !this.nav.isWhitespace(right)) {
+        // Insert 2 spaces after sentence-ending punctuation (.!?)
+        const isSentenceEnd = left === '.' || left === '!' || left === '?';
+        sendKeyEvent('space', {});
+        if (isSentenceEnd) sendKeyEvent('space', {});
       }
     }
 
