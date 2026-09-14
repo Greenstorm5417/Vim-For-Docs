@@ -10,28 +10,70 @@
         minTopPosition: 120,
         markerClass: 'relative-line-marker',
         caretSelector: '.kix-cursor-caret',
-        titleSelector: '.docs-title-outer',
         canvasTileSelector: '.kix-canvas-tile-content',
-        editorContainerSelector: '#kix-appview > div.kix-appview-editor-container > div',
-        linesToDisplay: 50,
-        defaultZoom: 1
+        linesToDisplay: 50
     };
-    
+
     // State variables
-    let lastCaretRect = null;
     let enabled = false; // current active state (markers shown)
     let globalEnabled = true; // respects Vim enabled toggle
     let lineNumbersPref = true; // respects Line Numbers toggle
     let initialized = false;
     let eventListenersAdded = false;
+    let settingsListenersAttached = false;
+    const changedPrefs = new Set();
     let observers = [];
+    let caretObserver = null;
+    let editorObserver = null;
+    let lifecycleObserver = null;
+    let observedCaret = null;
+    let observedEditor = null;
+    let rafId = null;
+    const trackedListeners = [];
     
     // Pool for reusing marker elements
     const markersPool = [];
     
-    // Detect browser environment
-    const isBrowser = typeof browser !== 'undefined';
-    const api = isBrowser ? browser : chrome;
+    // Detect browser environment (Firefox: `browser` + Promises; Chrome: `chrome` + callbacks)
+    const isFirefox = typeof browser !== 'undefined';
+    const api = isFirefox ? browser : chrome;
+
+    function storageGet(keys) {
+        if (isFirefox) {
+            return api.storage.sync.get(keys);
+        }
+        return new Promise((resolve, reject) => {
+            api.storage.sync.get(keys, (result) => {
+                if (chrome.runtime.lastError) {
+                    reject(chrome.runtime.lastError);
+                } else {
+                    resolve(result);
+                }
+            });
+        });
+    }
+
+    function readPref(data, key, defaultValue) {
+        try {
+            if (!data || typeof data !== 'object') return defaultValue;
+            if (!Object.prototype.hasOwnProperty.call(data, key)) return defaultValue;
+            const value = data[key];
+            if (typeof value === 'undefined' || value === null) return defaultValue;
+            return !!value;
+        } catch (_) {
+            return defaultValue;
+        }
+    }
+
+    function prefFromChange(change, fallback) {
+        try {
+            if (!change) return fallback;
+            if (typeof change.newValue === 'undefined' || change.newValue === null) return true;
+            return !!change.newValue;
+        } catch (_) {
+            return true;
+        }
+    }
     
     // Create styles for the markers
     function createStyles() {
@@ -51,10 +93,7 @@
                 pointer-events: none;
                 text-align: right;
                 width: 30px;
-                opacity: 0.8;
                 user-select: none;
-                will-change: transform;
-                transition: top 50ms linear;
             }
         `;
         document.head.appendChild(styleEl);
@@ -71,14 +110,6 @@
         });
     }
     
-    // Get current zoom level
-    function getZoomLevel() {
-        const titleElement = document.querySelector(config.titleSelector);
-        return titleElement && titleElement.style.zoom 
-               ? parseFloat(titleElement.style.zoom) 
-               : config.defaultZoom;
-    }
-    
     // Create a single marker element
     function createMarker(left, top, text) {
         if (top < config.minTopPosition) return null;
@@ -87,6 +118,7 @@
         if (!marker) {
             marker = document.createElement('div');
             marker.className = config.markerClass;
+            marker.setAttribute('aria-hidden', 'true');
         } else {
             marker.className = config.markerClass;
         }
@@ -107,34 +139,56 @@
         });
         document.body.appendChild(fragment);
     }
+
+    function cancelScheduledUpdate() {
+        if (rafId !== null) {
+            try { cancelAnimationFrame(rafId); } catch (_) {}
+            rafId = null;
+        }
+    }
+
+    function scheduleLineMarkerUpdate() {
+        if (!enabled) return;
+        if (rafId !== null) return;
+        rafId = requestAnimationFrame(() => {
+            rafId = null;
+            updateLineMarkers();
+        });
+    }
     
-    // Update relative line number markers (instant updates, no throttling)
+    // Update relative line number markers (coalesced via scheduleLineMarkerUpdate)
     function updateLineMarkers() {
         if (!enabled) { clearMarkers(); return; }
         try {
-            const caret = document.querySelector(config.caretSelector);
-            if (!caret) return;
+            if (!observedEditor || !observedEditor.isConnected) {
+                observeEditorChanges();
+            }
+            if (!observedCaret || !observedCaret.isConnected) {
+                observeCaretChanges();
+            }
+            const caret = (observedCaret && observedCaret.isConnected)
+                ? observedCaret
+                : document.querySelector(config.caretSelector);
+            if (!caret) { clearMarkers(); return; }
             const caretRect = caret.getBoundingClientRect();
-            if (caretRect.width === 0 && caretRect.height === 0) return;
+            if (caretRect.width === 0 && caretRect.height === 0) { clearMarkers(); return; }
 
             const caretTopDoc = caretRect.top + window.scrollY;
-            lastCaretRect = { ...caretRect };
-
-            // Clear existing markers
-            clearMarkers();
 
             // Determine left position from canvas tiles if possible
             let lineNumberLeft;
-            const tiles = Array.from(document.querySelectorAll(config.canvasTileSelector));
+            const tiles = Array.from(document.querySelectorAll(config.canvasTileSelector), el => el.getBoundingClientRect());
             if (tiles.length) {
-                const minLeft = tiles.reduce((min, el) => Math.min(min, el.getBoundingClientRect().left + window.scrollX), Infinity);
+                const minLeft = tiles.reduce((min, rect) => Math.min(min, rect.left + window.scrollX), Infinity);
                 lineNumberLeft = isFinite(minLeft) ? minLeft : 0;
             } else {
                 lineNumberLeft = 0;
             }
 
             // Build a list of candidate line tops near the caret
-            const lineTops = getLineTopsNear(caretTopDoc);
+            const lineTops = getLineTopsNear();
+            // Complete geometry reads before removing/reusing marker nodes.
+            clearMarkers();
             const markers = [];
 
             if (lineTops.length) {
@@ -154,9 +208,11 @@
                 }
             } else {
                 // Fallback: approximate using caret height and skip gaps between tiles
-                const zoomLevel = getZoomLevel();
-                const lineHeight = caretRect.height * zoomLevel; // best-effort
-                const intervals = getTileVerticalIntervals();
+                // Bounding rectangles already include the rendered zoom.
+                const lineHeight = caretRect.height; // best-effort
+                if (lineHeight <= 0) return;
+                const intervals = tiles.map(rect => [rect.top + window.scrollY, rect.bottom + window.scrollY])
+                    .sort((a, b) => a[0] - b[0]);
                 for (let off = -config.linesToDisplay; off <= config.linesToDisplay; off++) {
                     if (off === 0) continue;
                     let y = caretTopDoc + off * lineHeight;
@@ -170,7 +226,7 @@
         } catch (_) {}
     }
 
-    function getLineTopsNear(centerYDoc) {
+    function getLineTopsNear() {
         const selectors = [
             '.kix-lineview-content',
             '.kix-lineview',
@@ -181,27 +237,18 @@
         const tops = [];
         const viewMin = window.scrollY - window.innerHeight * 0.5;
         const viewMax = window.scrollY + window.innerHeight * 1.5;
-        selectors.forEach(sel => {
-            const els = document.querySelectorAll(sel);
-            els.forEach(el => {
-                const r = el.getBoundingClientRect();
-                if (!r || r.height === 0 && r.width === 0) return;
-                const top = Math.round(r.top + window.scrollY);
-                if (top < viewMin || top > viewMax) return;
-                const key = String(top);
-                if (!seen.has(key)) { seen.add(key); tops.push(top); }
-            });
+        // A combined selector returns each element once, even if it matches
+        // multiple line classes. Avoid duplicate synchronous layout reads.
+        document.querySelectorAll(selectors.join(',')).forEach(el => {
+            const r = el.getBoundingClientRect();
+            if (!r || r.height === 0 && r.width === 0) return;
+            const top = Math.round(r.top + window.scrollY);
+            if (top < viewMin || top > viewMax) return;
+            const key = String(top);
+            if (!seen.has(key)) { seen.add(key); tops.push(top); }
         });
         tops.sort((a,b)=>a-b);
         return tops;
-    }
-
-    function getTileVerticalIntervals() {
-        const tiles = Array.from(document.querySelectorAll(config.canvasTileSelector));
-        return tiles.map(el => {
-            const r = el.getBoundingClientRect();
-            return [r.top + window.scrollY, r.bottom + window.scrollY];
-        }).sort((a,b)=>a[0]-b[0]);
     }
 
     function isInAnyInterval(y, intervals) {
@@ -211,25 +258,34 @@
         }
         return false;
     }
-    
-    // Handle scroll events (instant updates)
-    function handleScroll() {
-        if (!enabled) return;
-        updateLineMarkers();
+
+    function dropObserver(obs) {
+        if (!obs) return;
+        try { obs.disconnect(); } catch (_) {}
+        const i = observers.indexOf(obs);
+        if (i >= 0) observers.splice(i, 1);
     }
-    
+
     // Set up mutation observer to watch for caret changes
     function observeCaretChanges() {
-        const caret = document.querySelector(config.caretSelector);
-        if (!caret) {
-            if (enabled) {
-                setTimeout(observeCaretChanges, 1000);
-            }
-            return null;
+        if (!enabled) return null;
+        if (observedCaret && observedCaret.isConnected && caretObserver) {
+            return caretObserver;
         }
-        
+
+        dropObserver(caretObserver);
+        caretObserver = null;
+        observedCaret = null;
+
+        const caret = document.querySelector(config.caretSelector);
+        if (!caret) return null;
+
         const observer = new MutationObserver(() => {
-            if (enabled) updateLineMarkers();
+            if (!enabled) return;
+            if (!observedCaret || !observedCaret.isConnected) {
+                observeCaretChanges();
+            }
+            scheduleLineMarkerUpdate();
         });
         
         observer.observe(caret, { 
@@ -237,24 +293,33 @@
             characterData: true, 
             subtree: true 
         });
-        
+
+        caretObserver = observer;
+        observedCaret = caret;
+        observers.push(observer);
         return observer;
     }
     
     // Observe editor position changes
     function observeEditorChanges() {
-        const docContainer = document.querySelector('.kix-appview-editor');
-        if (!docContainer) {
-            if (enabled) {
-                setTimeout(observeEditorChanges, 1000);
-            }
-            return null;
+        if (!enabled) return null;
+        if (editorObserver && observedEditor && observedEditor.isConnected) {
+            return editorObserver;
         }
+
+        dropObserver(editorObserver);
+        editorObserver = null;
+        observedEditor = null;
+
+        const docContainer = document.querySelector('.kix-appview-editor');
+        if (!docContainer) return null;
         
         const observer = new MutationObserver(() => {
-            if (enabled) {
-                updateLineMarkers(true);
+            if (!enabled) return;
+            if (!observedCaret || !observedCaret.isConnected) {
+                observeCaretChanges();
             }
+            scheduleLineMarkerUpdate();
         });
         
         observer.observe(docContainer, { 
@@ -263,82 +328,126 @@
             childList: true, 
             subtree: true
         });
-        
+
+        editorObserver = observer;
+        observedEditor = docContainer;
+        observers.push(observer);
         return observer;
+    }
+
+    function addTrackedListener(target, type, handler, options) {
+        if (!target) return;
+        target.addEventListener(type, handler, options);
+        trackedListeners.push({ target, type, handler, options });
+    }
+
+    function removeEventListeners() {
+        trackedListeners.forEach(({ target, type, handler, options }) => {
+            try { target.removeEventListener(type, handler, options); } catch (_) {}
+        });
+        trackedListeners.length = 0;
+        eventListenersAdded = false;
+    }
+
+    function onInteractiveUpdate() {
+        if (!enabled) return;
+        if (!observedCaret || !observedCaret.isConnected) {
+            observeCaretChanges();
+        }
+        if (!observedEditor || !observedEditor.isConnected) {
+            observeEditorChanges();
+        }
+        scheduleLineMarkerUpdate();
+    }
+
+    function handleScroll() {
+        if (!enabled) return;
+        scheduleLineMarkerUpdate();
+    }
+
+    function handleResize() {
+        if (!enabled) return;
+        scheduleLineMarkerUpdate();
     }
     
     // Add event listeners for user interaction
     function addEventListeners() {
         if (eventListenersAdded) return;
-        
-        document.addEventListener("keyup", () => {
-            if (enabled) updateLineMarkers();
-        }, { passive: true });
-        
-        document.addEventListener("keydown", () => {
-            if (enabled) updateLineMarkers();
-        }, { passive: true });
-        
-        document.addEventListener("mouseup", () => {
-            if (enabled) updateLineMarkers();
-        }, { passive: true });
-        
-        // Add scroll listeners
-        document.addEventListener("scroll", handleScroll, { passive: true });
-        window.addEventListener("resize", () => {
-            if (enabled) updateLineMarkers(true);
-        }, { passive: true });
-        
-        // Add scroll listener to the editor container
-        const editorContainer = document.querySelector(config.editorContainerSelector);
-        if (editorContainer) {
-            editorContainer.addEventListener("scroll", handleScroll, { passive: true });
-        }
-        
-        // Also monitor more DOM elements for scroll events
-        const possibleScrollContainers = document.querySelectorAll('.kix-appview-editor, .docs-scrollable');
-        possibleScrollContainers.forEach(container => {
-            container.addEventListener("scroll", handleScroll, { passive: true });
-        });
+
+        addTrackedListener(document, "keyup", onInteractiveUpdate, { passive: true });
+        addTrackedListener(document, "keydown", onInteractiveUpdate, { passive: true });
+        addTrackedListener(document, "mouseup", onInteractiveUpdate, { passive: true });
+        // Scroll does not bubble; capture also covers replacement containers.
+        addTrackedListener(document, "scroll", handleScroll, { passive: true, capture: true });
+        addTrackedListener(window, "resize", handleResize, { passive: true });
         
         eventListenersAdded = true;
     }
     
     // Set up observers for document changes
     function setupObservers() {
-        if (observers.length === 0) {
-            const caretObserver = observeCaretChanges();
-            const editorObserver = observeEditorChanges();
-            
-            if (caretObserver) observers.push(caretObserver);
-            if (editorObserver) observers.push(editorObserver);
+        observeCaretChanges();
+        observeEditorChanges();
+        if (!lifecycleObserver) {
+            lifecycleObserver = new MutationObserver(records => {
+                // Ordinary edits need no root lookup. A replaced/missing
+                // editor or caret must recover even after a long idle period.
+                if (enabled && (!observedCaret?.isConnected || !observedEditor?.isConnected) &&
+                    records.some(record => [...record.addedNodes, ...record.removedNodes].some(node =>
+                        node.nodeType === 1 && !node.classList.contains(config.markerClass)))) {
+                    scheduleLineMarkerUpdate();
+                }
+            });
+            lifecycleObserver.observe(document.documentElement, { childList: true, subtree: true });
+            observers.push(lifecycleObserver);
         }
     }
     
     // Clean up observers if needed
     function cleanupObservers() {
-        observers.forEach(observer => observer.disconnect());
+        observers.forEach(observer => {
+            try { observer.disconnect(); } catch (_) {}
+        });
         observers = [];
+        caretObserver = null;
+        editorObserver = null;
+        lifecycleObserver = null;
+        observedCaret = null;
+        observedEditor = null;
+    }
+
+    function teardown() {
+        cancelScheduledUpdate();
+        cleanupObservers();
+        removeEventListeners();
+        clearMarkers();
     }
     
     // Toggle line numbers on/off
     function toggleLineNumbers(showLineNumbers) {
+        const shouldEnable = !!showLineNumbers;
         const wasEnabled = enabled;
-        enabled = showLineNumbers;
-        
-        // If turning off, make sure markers are cleared
-        if (!enabled) {
-            clearMarkers();
+
+        if (!shouldEnable) {
+            enabled = false;
+            teardown();
+            return enabled;
         }
-        
-        // If turning on from off
-        if (enabled && !wasEnabled) {
-            if (!initialized) {
-                init();
-            } else {
-                addEventListeners();
-                setupObservers();
-                updateLineMarkers(true);
+
+        enabled = true;
+        if (!wasEnabled) {
+            try {
+                if (!initialized) {
+                    init();
+                } else {
+                    addEventListeners();
+                    setupObservers();
+                    scheduleLineMarkerUpdate();
+                }
+            } catch (error) {
+                enabled = false;
+                teardown();
+                console.warn('[Vim line numbers] Initialization failed', error);
             }
         }
         
@@ -354,74 +463,99 @@
     function init() {
         if (initialized) return;
         
+        createStyles();
+        addEventListeners();
+        if (enabled) {
+            setupObservers();
+            scheduleLineMarkerUpdate();
+        }
+        initialized = true;
+    }
+
+    function applyStorageData(data) {
+        if (!changedPrefs.has('enabled')) globalEnabled = readPref(data, 'enabled', true);
+        if (!changedPrefs.has('lineNumbersEnabled')) lineNumbersPref = readPref(data, 'lineNumbersEnabled', true);
+    }
+
+    function attachSettingsListeners() {
+        if (settingsListenersAttached) return;
+        settingsListenersAttached = true;
+
+        // Listen for runtime messages (optional path)
         try {
-            createStyles();
-            addEventListeners();
-            
-            if (enabled) {
-                setupObservers();
-                updateLineMarkers(true);
-            }
-            
-            initialized = true;
-        } catch (error) {
-            // Silent error handling
+            api.runtime.onMessage.addListener((message, sender, sendResponse) => {
+                try {
+                    if (message && message.action === "updateSettings" && message.settings) {
+                        if (Object.prototype.hasOwnProperty.call(message.settings, 'enabled')) {
+                            changedPrefs.add('enabled');
+                            globalEnabled = readPref(message.settings, 'enabled', true);
+                        }
+                        if (Object.prototype.hasOwnProperty.call(message.settings, 'lineNumbersEnabled')) {
+                            changedPrefs.add('lineNumbersEnabled');
+                            lineNumbersPref = readPref(message.settings, 'lineNumbersEnabled', true);
+                        }
+                        applyEffectiveEnabled();
+                    }
+                } catch (_) {
+                    globalEnabled = true;
+                    lineNumbersPref = true;
+                    applyEffectiveEnabled();
+                }
+                return false;
+            });
+        } catch (e) {
+            // ignore
+        }
+
+        // Listen to storage changes for instant apply (no tabs permission needed)
+        try {
+            api.storage.onChanged.addListener((changes, area) => {
+                try {
+                    if (area !== 'sync') return;
+                    if (changes && changes.enabled) {
+                        changedPrefs.add('enabled');
+                        globalEnabled = prefFromChange(changes.enabled, globalEnabled);
+                    }
+                    if (changes && changes.lineNumbersEnabled) {
+                        changedPrefs.add('lineNumbersEnabled');
+                        lineNumbersPref = prefFromChange(changes.lineNumbersEnabled, lineNumbersPref);
+                    }
+                    applyEffectiveEnabled();
+                } catch (_) {
+                    globalEnabled = true;
+                    lineNumbersPref = true;
+                    applyEffectiveEnabled();
+                }
+            });
+        } catch (e) {
+            // ignore
         }
     }
     
     // Check storage for initial state
     function checkInitialState() {
+        attachSettingsListeners();
+        const startWithDefaults = () => {
+            applyEffectiveEnabled();
+        };
+
         try {
-            api.storage.sync.get(["enabled", "lineNumbersEnabled"], (data) => {
-                try { globalEnabled = (typeof data.enabled !== 'undefined') ? !!data.enabled : true; } catch (_) { globalEnabled = true; }
-                try { lineNumbersPref = (typeof data.lineNumbersEnabled !== 'undefined') ? !!data.lineNumbersEnabled : true; } catch (_) { lineNumbersPref = true; }
-
-                if (globalEnabled && lineNumbersPref) {
-                    enabled = true;
-                    init();
-                }
-
-                // Listen for runtime messages (optional path)
-                try {
-                    api.runtime.onMessage.addListener((message, sender, sendResponse) => {
-                        if (message && message.action === "updateSettings" && message.settings) {
-                            if (Object.prototype.hasOwnProperty.call(message.settings, 'enabled')) {
-                                globalEnabled = !!message.settings.enabled;
-                            }
-                            if (Object.prototype.hasOwnProperty.call(message.settings, 'lineNumbersEnabled')) {
-                                lineNumbersPref = !!message.settings.lineNumbersEnabled;
-                            }
-                            applyEffectiveEnabled();
-                        }
-                        return true;
-                    });
-                } catch (e) {
-                    // ignore
-                }
-
-                // Listen to storage changes for instant apply (no tabs permission needed)
-                try {
-                    api.storage.onChanged.addListener((changes, area) => {
-                        if (area !== 'sync') return;
-                        if (changes.enabled) globalEnabled = !!changes.enabled.newValue;
-                        if (changes.lineNumbersEnabled) lineNumbersPref = !!changes.lineNumbersEnabled.newValue;
-                        applyEffectiveEnabled();
-                    });
-                } catch (e) {
-                    // ignore
-                }
+            Promise.resolve(storageGet(["enabled", "lineNumbersEnabled"])).then((data) => {
+                applyStorageData(data);
+                applyEffectiveEnabled();
+            }).catch(() => {
+                startWithDefaults();
             });
         } catch (e) {
-            // If Browser API is not available, start in enabled mode
-            console.error("Error accessing browser storage:", e);
-            enabled = true;
-            init();
+            startWithDefaults();
         }
     }
-    
     // Expose API to window
     window.relativeLineNumbers = {
-        update: updateLineMarkers,
+        update: function() {
+            if (!enabled) { clearMarkers(); return; }
+            scheduleLineMarkerUpdate();
+        },
         toggle: toggleLineNumbers,
         clear: clearMarkers
     };

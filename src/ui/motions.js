@@ -18,12 +18,15 @@
         input.type = 'text';
         input.value = String(tok || '');
         input.style.border = 'none';
-        input.style.outline = 'none';
+        input.setAttribute('aria-label', 'Key token ' + (i + 1));
         input.style.width = Math.max(24, (String(tok||'').length + 1) * 8) + 'px';
         input.addEventListener('input', () => { arrRef[i] = window.VimConfig.normalizeToken(input.value === ' ' ? ' ' : input.value.trim()); onChange(); });
         chip.appendChild(input);
         const rem = document.createElement('button'); rem.textContent = '×'; rem.title = 'Remove token'; rem.style.marginLeft = '4px'; rem.style.border = 'none'; rem.style.background='transparent'; rem.style.cursor='pointer'; rem.style.fontSize='14px';
-        rem.addEventListener('click', () => { arrRef.splice(i,1); onChange(); render(); });
+        rem.addEventListener('click', () => {
+          arrRef.splice(i,1); onChange(); render();
+          (wrap.querySelectorAll('input')[Math.min(i, arrRef.length - 1)] || wrap.lastElementChild).focus();
+        });
         chip.appendChild(rem);
         const sep = document.createElement('span'); sep.textContent = '→'; sep.style.margin = '0 2px'; sep.style.color = '#888';
         wrap.appendChild(chip);
@@ -32,7 +35,11 @@
       const add = document.createElement('button');
       add.textContent = '+ token';
       add.style.padding = '2px 8px'; add.style.fontSize = '12px';
-      add.addEventListener('click', () => { if (!Array.isArray(arrRef)) arrRef = []; arrRef.push(''); onChange(); render(); });
+      add.addEventListener('click', () => {
+        if (!Array.isArray(arrRef)) arrRef = [];
+        arrRef.push(''); onChange(); render();
+        wrap.querySelectorAll('input')[arrRef.length - 1].focus();
+      });
       wrap.appendChild(add);
     }
     render();
@@ -40,12 +47,27 @@
   }
 
 document.addEventListener('DOMContentLoaded', async function () {
-  const apiScript = document.createElement('script');
-  apiScript.src = chrome.runtime.getURL('browser-api.js');
-  document.head.appendChild(apiScript);
-  await new Promise(resolve => { apiScript.onload = resolve; });
-
   const $ = (sel) => document.querySelector(sel);
+  const pageStatus = $('#pageStatus');
+  function setPageStatus(msg, kind) {
+    if (!pageStatus) return;
+    pageStatus.className = 'status' + (kind ? ' ' + kind : '');
+    pageStatus.textContent = msg || '';
+  }
+  let helperFailed = false;
+  try {
+    await new Promise((resolve, reject) => {
+      const apiScript = document.createElement('script');
+      apiScript.src = chrome.runtime.getURL('browser-api.js');
+      apiScript.onload = () => window.browserAPI ? resolve() : reject(new Error('missing browserAPI'));
+      apiScript.onerror = () => reject(new Error('load failed'));
+      document.head.appendChild(apiScript);
+    });
+  } catch (e) {
+    helperFailed = true;
+    setPageStatus('Failed to load browser helper script. Storage and save are unavailable.', 'err');
+  }
+
   const editor = $('#editor');
   const tabs = $('#sectionTabs');
   
@@ -73,6 +95,11 @@ document.addEventListener('DOMContentLoaded', async function () {
   const status = $('#status');
   const btnReset = $('#btn-reset');
   const btnSave = $('#btn-save');
+  const btnExport = $('#btn-export');
+  const btnImport = $('#btn-import');
+  const btnPreset = $('#btn-preset');
+  const presetSelect = $('#presetSelect');
+  const importFile = $('#importFile');
   const modalBackdrop = $('#modalBackdrop');
   const modal = $('#modal');
 
@@ -80,6 +107,18 @@ document.addEventListener('DOMContentLoaded', async function () {
   let storedConfig = null;
   let currentConfig = null;
   let activeSection = 'motions';
+  let busy = true;
+  let jsonValid = true;
+  function setBusy(value) {
+    busy = value;
+    for (const control of [btnSave, btnReset, btnExport, btnImport, btnPreset, presetSelect, jsonArea]) {
+      if (control) control.disabled = value;
+    }
+    editor.inert = value || !jsonValid;
+    tabs.inert = value || !jsonValid;
+    modal.inert = value;
+  }
+  setBusy(true);
 
   const MODES = ['normal','visual','visualLine','insert'];
 
@@ -115,43 +154,64 @@ document.addEventListener('DOMContentLoaded', async function () {
   function deepClone(o) { return JSON.parse(JSON.stringify(o || {})); }
 
   async function loadBaseConfig() {
-    try {
       const url = chrome.runtime.getURL('motions.json');
       const res = await fetch(url, { cache: 'no-cache' });
+      if (!res.ok) throw new Error('Bundled configuration could not be loaded');
       const data = await res.json();
+      const error = window.VimConfig.validate(data);
+      if (error) throw new Error(error);
       return data;
+  }
+
+  function parseStoredConfig(raw) {
+    if (typeof raw === 'undefined') return { value: null, malformed: false };
+    try {
+      const value = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return { value: null, malformed: true, error: 'Stored config is not an object' };
+      }
+      const error = window.VimConfig.validate(value);
+      if (error) return { value: null, malformed: true, error };
+      return { value, malformed: false };
     } catch (e) {
-      return { motions: [], operators: [], textObjects: [], operatorSelf: [], commands: [], settings: {} };
+      return { value: null, malformed: true, error: e.message || 'Invalid JSON' };
     }
   }
 
   async function loadStoredConfig() {
+    if (!window.browserAPI) return { value: null, malformed: false };
     try {
       const localData = await window.browserAPI.storageLocal.get(['motionsConfig']);
       if (localData && typeof localData.motionsConfig !== 'undefined') {
-        if (typeof localData.motionsConfig === 'string') {
-          try { return JSON.parse(localData.motionsConfig); } catch (e) { return null; }
-        }
-        return localData.motionsConfig;
+        return parseStoredConfig(localData.motionsConfig);
       }
-    } catch (e) {}
+    } catch (e) {
+      return { value: null, malformed: true, error: e.message || 'Could not read local config' };
+    }
     try {
       const syncData = await window.browserAPI.storage.get(['motionsConfig']);
-      if (!syncData || typeof syncData.motionsConfig === 'undefined') return null;
-      if (typeof syncData.motionsConfig === 'string') {
-        try { return JSON.parse(syncData.motionsConfig); } catch (e) { return null; }
-      }
-      return syncData.motionsConfig;
+      if (!syncData || typeof syncData.motionsConfig === 'undefined') return { value: null, malformed: false };
+      return parseStoredConfig(syncData.motionsConfig);
     } catch (e) {
-      return null;
+      return { value: null, malformed: true, error: e.message || 'Could not read synced config' };
     }
   }
 
   // removed preview rendering
 
   let dirty = false;
-  function setStatusOk(msg) { status.className = 'status ok'; status.textContent = msg; }
-  function setStatusErr(msg) { status.className = 'status err'; status.textContent = msg; }
+  function setStatusOk(msg) {
+    status.className = 'status ok'; status.textContent = msg;
+    if (!helperFailed) setPageStatus(msg, 'ok');
+  }
+  function setStatusErr(msg) {
+    status.className = 'status err'; status.textContent = msg;
+    if (!helperFailed) setPageStatus(msg, 'err');
+  }
+  function setStatusWarn(msg) {
+    status.className = 'status warn'; status.textContent = msg;
+    if (!helperFailed) setPageStatus(msg, 'warn');
+  }
 
   function tokensToStr(a) { return Array.isArray(a) ? a.join(' ') : ''; }
   function strToTokens(s) { return (s || '').trim() ? (s.trim().split(/\s+/)) : []; }
@@ -177,15 +237,38 @@ document.addEventListener('DOMContentLoaded', async function () {
   }
 
   // --- Modal helpers ---
+  let modalTrigger;
+  let helpReturn = null;
   function showModal(contentNode) {
+    if (modalBackdrop.style.display !== 'flex') modalTrigger = document.activeElement;
     modal.innerHTML = '';
     if (contentNode) modal.appendChild(contentNode);
     modalBackdrop.style.display = 'flex';
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-label', modal.querySelector('h3')?.textContent || 'Edit binding');
+    modal.querySelector('input, button, select, textarea')?.focus();
   }
   function hideModal() {
+    if (helpReturn) {
+      const previous = helpReturn;
+      helpReturn = null;
+      showModal(previous.content);
+      previous.focus?.focus();
+      return;
+    }
     modalBackdrop.style.display = 'none';
     modal.innerHTML = '';
+    modalTrigger?.focus();
   }
+  modal.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { e.preventDefault(); hideModal(); return; }
+    if (e.key !== 'Tab') return;
+    const controls = Array.from(modal.querySelectorAll('input, button, select, textarea, a[href]')).filter(el => !el.disabled);
+    const first = controls[0], last = controls.at(-1);
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last?.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first?.focus(); }
+  });
   modalBackdrop.addEventListener('click', (e) => { if (e.target === modalBackdrop) hideModal(); });
 
   function buildModalHeader(title) {
@@ -347,6 +430,15 @@ document.addEventListener('DOMContentLoaded', async function () {
       td.appendChild(input);
       tr.appendChild(td);
     });
+    const resetTd = document.createElement('td');
+    const resetBtn = document.createElement('button');
+    resetBtn.type = 'button';
+    resetBtn.className = 'row-reset';
+    resetBtn.textContent = 'Reset keys';
+    resetBtn.title = 'Restore this item\'s keys from the bundled default';
+    resetBtn.addEventListener('click', () => resetItemKeys(section, item));
+    resetTd.appendChild(resetBtn);
+    tr.appendChild(resetTd);
     // No row deletion allowed
     return tr;
   }
@@ -363,7 +455,11 @@ document.addEventListener('DOMContentLoaded', async function () {
     const thead = document.createElement('thead');
     const hdr = document.createElement('tr');
     cols.forEach(col => { const th = document.createElement('th'); th.textContent = col.label; th.style.textAlign = 'left'; th.style.padding = '4px 6px'; hdr.appendChild(th); });
-    // No Actions column
+    const resetTh = document.createElement('th');
+    resetTh.textContent = '';
+    resetTh.style.textAlign = 'left';
+    resetTh.style.padding = '4px 6px';
+    hdr.appendChild(resetTh);
     thead.appendChild(hdr);
     table.appendChild(thead);
     const tbody = document.createElement('tbody');
@@ -379,6 +475,7 @@ document.addEventListener('DOMContentLoaded', async function () {
 
   // Help modal
   function openHelpModal() {
+    helpReturn = { content: modal.firstElementChild, focus: document.activeElement };
     const box = document.createElement('div');
     box.appendChild(buildModalHeader('Help'));
     const content = document.createElement('div');
@@ -396,7 +493,8 @@ document.addEventListener('DOMContentLoaded', async function () {
         Non-editable fields (ID, Operator, Target Type) are fixed to preserve behavior.
         Insert mappings restore ordinary typing on mismatch or timeout (500 ms by default).
         Advanced JSON settings control mappingTimeoutMs, registerPrefix, allowCountPrefix,
-        allowRegisterPrefix, tokenAliases, and cancelTokens. Remove the default Ctrl+[ alias
+        allowRegisterPrefix, tokenAliases, cancelTokens, promptSubmitTokens, and
+        promptBackspaceTokens. Remove the default Ctrl+[ alias
         from tokenAliases to bind it independently. Browser/OS-reserved shortcuts may not reach Docs.
       </small></div>
     `;
@@ -427,10 +525,75 @@ document.addEventListener('DOMContentLoaded', async function () {
     }
   }
 
+  function findBaseItem(section, item) {
+    const list = (baseConfig && baseConfig[section]) || [];
+    if (section === 'operatorSelf') {
+      return list.find(o => o.operator === item.operator && o.target?.type === item.target?.type);
+    }
+    return list.find(o => o.id === item.id);
+  }
+
+  function resetItemKeys(section, item) {
+    const base = findBaseItem(section, item);
+    if (!base) {
+      setStatusErr('No bundled default for this item');
+      return;
+    }
+    item.keys = deepClone(base.keys);
+    if (section === 'commands') {
+      if (base.modes) item.modes = deepClone(base.modes);
+      else delete item.modes;
+    }
+    onConfigChange();
+    buildEditor();
+    const error = window.VimConfig.validate(currentConfig);
+    if (error) setStatusErr('Restored keys, but config is invalid: ' + error);
+    else setStatusOk('Restored keys from default — click Save to persist');
+  }
+
+  function applyEditorConfig(next, message) {
+    clearTimeout(t);
+    jsonValid = true;
+    currentConfig = deepClone(next);
+    ['motions','operators','textObjects','operatorSelf','commands'].forEach(k => {
+      if (!Array.isArray(currentConfig[k])) currentConfig[k] = [];
+    });
+    jsonArea.value = pretty(currentConfig);
+    buildEditor();
+    setBusy(false);
+    dirty = true;
+    setStatusOk(message);
+  }
+
+  function docsSafeConfig() {
+    const cfg = deepClone(baseConfig);
+    for (const command of cfg.commands || []) {
+      if (command.id === 'insert_autocomplete_next') command.keys = ['<F24>'];
+      if (command.id === 'insert_autocomplete_prev') command.keys = ['<F23>'];
+    }
+    return cfg;
+  }
+
+  function downloadConfig(config) {
+    const blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'vim-for-docs-motions.json';
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   async function init() {
     baseConfig = await loadBaseConfig();
-    storedConfig = await loadStoredConfig();
-    currentConfig = deepClone(storedConfig || baseConfig);
+    const stored = await loadStoredConfig();
+    storedConfig = stored.value;
+    if (stored.malformed) {
+      currentConfig = deepClone(baseConfig);
+      setStatusWarn('Could not load stored config; showing defaults. ' + (stored.error || ''));
+    } else {
+      currentConfig = deepClone(storedConfig || baseConfig);
+    }
     ['motions','operators','textObjects','operatorSelf','commands'].forEach(k => { if (!Array.isArray(currentConfig[k])) currentConfig[k] = []; });
     jsonArea.value = pretty(currentConfig);
     buildEditor();
@@ -439,21 +602,26 @@ document.addEventListener('DOMContentLoaded', async function () {
     });
     switchTab('motions');
     dirty = false;
+    setBusy(false);
     window.addEventListener('beforeunload', (e) => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
   }
 
   btnReset.addEventListener('click', async () => {
+    if (busy) return;
     const box = document.createElement('div');
     box.appendChild(buildModalHeader('Reset to Default'));
     const msg = document.createElement('div'); msg.style.margin = '8px 0'; msg.textContent = 'This will discard all your custom motions and restore defaults.'; box.appendChild(msg);
     const f = document.createElement('div'); f.className = 'footer';
     const cancel = document.createElement('button'); cancel.textContent = 'Cancel'; cancel.addEventListener('click', hideModal);
     const reset = document.createElement('button'); reset.textContent = 'Reset'; reset.className = 'primary'; reset.addEventListener('click', async () => {
+      if (busy) return;
+      setBusy(true);
       try {
+        await window.browserAPI.storage.remove('motionsConfig');
         await window.browserAPI.storageLocal.remove('motionsConfig');
-        try { await window.browserAPI.storage.remove('motionsConfig'); } catch (_) {}
         storedConfig = null;
         currentConfig = deepClone(baseConfig);
+        jsonValid = true;
         jsonArea.value = pretty(currentConfig);
         buildEditor();
         clearTimeout(t);
@@ -461,13 +629,14 @@ document.addEventListener('DOMContentLoaded', async function () {
         setStatusOk('Reset to default');
       } catch (e) {
         setStatusErr('Failed to reset: ' + (e.message || e));
-      } finally { hideModal(); }
+      } finally { setBusy(false); hideModal(); }
     });
     f.appendChild(cancel); f.appendChild(reset); box.appendChild(f);
     showModal(box);
   });
 
   btnSave.addEventListener('click', async () => {
+    if (busy) return;
     clearTimeout(t);
     const res = validateJson(jsonArea.value);
     if (!res.ok) {
@@ -475,8 +644,26 @@ document.addEventListener('DOMContentLoaded', async function () {
       return;
     }
     const toSave = res.value;
+    currentConfig = deepClone(toSave);
+    jsonValid = true;
+    buildEditor();
+    if (!window.browserAPI) {
+      setStatusErr('Not saved: browser helper script is unavailable');
+      return;
+    }
+    setBusy(true);
     try {
       await window.browserAPI.storageLocal.set({ motionsConfig: toSave });
+      try {
+        await window.browserAPI.storage.remove('motionsConfig');
+      } catch (e) {
+        setStatusErr('Saved locally, but failed to clear sync copy: ' + (e.message || e));
+        currentConfig = deepClone(toSave);
+        buildEditor();
+        jsonArea.value = pretty(currentConfig);
+        dirty = false;
+        return;
+      }
       setStatusOk('Saved');
       currentConfig = deepClone(toSave);
       buildEditor();
@@ -484,20 +671,76 @@ document.addEventListener('DOMContentLoaded', async function () {
       dirty = false;
     } catch (e) {
       setStatusErr('Failed to save: ' + (e.message || e));
-    }
+    } finally { setBusy(false); }
   });
+
+  if (btnExport) {
+    btnExport.addEventListener('click', () => {
+      const res = validateJson(jsonArea.value);
+      if (!res.ok) {
+        setStatusErr('Export failed: ' + res.error);
+        return;
+      }
+      downloadConfig(res.value);
+      setStatusOk('Exported current config');
+    });
+  }
+
+  if (btnImport && importFile) {
+    btnImport.addEventListener('click', () => importFile.click());
+    importFile.addEventListener('change', async () => {
+      if (busy) return;
+      const file = importFile.files && importFile.files[0];
+      importFile.value = '';
+      if (!file) return;
+      if (file.size > 1000000) { setStatusErr('Import failed: configuration exceeds 1 MB'); return; }
+      setBusy(true);
+      let text;
+      try { text = await file.text(); } catch (e) {
+        setStatusErr('Import failed: could not read file');
+        return;
+      } finally { setBusy(false); }
+      const res = validateJson(text);
+      if (!res.ok) {
+        setStatusErr('Import failed: ' + res.error);
+        return;
+      }
+      applyEditorConfig(res.value, 'Imported — click Save to persist');
+    });
+  }
+
+  if (btnPreset && presetSelect) {
+    btnPreset.addEventListener('click', () => {
+      const name = presetSelect.value;
+      const next = name === 'docs-safe' ? docsSafeConfig() : deepClone(baseConfig);
+      const error = window.VimConfig.validate(next);
+      if (error) {
+        setStatusErr('Preset is invalid: ' + error);
+        return;
+      }
+      applyEditorConfig(next, (name === 'docs-safe' ? 'Applied docs-safe' : 'Applied vim-default') + ' — click Save to persist');
+    });
+  }
 
   // passive json validation while typing
   let t;
   jsonArea.addEventListener('input', () => {
     dirty = true;
+    jsonValid = false;
+    // Keep the previous table inactive until the latest JSON has been validated.
+    editor.inert = true;
+    tabs.inert = true;
     clearTimeout(t);
     t = setTimeout(() => {
       const res = validateJson(jsonArea.value);
+      jsonValid = res.ok;
+      if (res.ok) { currentConfig = res.value; buildEditor(); }
+      editor.inert = busy || !jsonValid;
+      tabs.inert = busy || !jsonValid;
       if (res.ok) setStatusOk('Valid JSON'); else setStatusErr('Invalid: ' + res.error);
       dirty = true;
     }, 300);
   });
 
-  init();
+  init().catch(() => setStatusErr('Failed to load the motions editor'));
 });

@@ -36,7 +36,7 @@
       const error = window.VimConfig.validate(config);
       if (error) throw new Error(error);
       this.config = config || {};
-      this.settings = { ...window.VimConfig.defaults, ...this.config.settings };
+      this.settings = window.VimConfig.normalizeSettings(this.config.settings);
       this.motionsRoot = new TrieNode();
       this.operatorsRoot = new TrieNode();
       this.textObjectsRoot = new TrieNode();
@@ -87,6 +87,8 @@
         const root = this._getCommandRoot();
         return !!(root && root.children.has(token));
       }
+      if (this.settings.allowRegisterPrefix && token === this.settings.registerPrefix &&
+          !this.haveOperator && !this.mappingStarted && !this.awaitingCharFor && this.register == null) return true;
       const roots = [
         this.motionsRoot,
         this._getCommandRoot(),
@@ -114,6 +116,41 @@
       return this.settings.cancelTokens.includes(this.settings.tokenAliases?.[token] || token);
     }
 
+    // Bounded hint for the status bar: pending keys/count/register and next tokens.
+    hint() {
+      const next = [];
+      const addNode = node => {
+        if (!node || next.length >= 20) return;
+        for (const key of node.children.keys()) {
+          const token = key === PLACEHOLDER_CHAR ? '<char>' : key;
+          if (!next.includes(token)) next.push(token);
+          if (next.length >= 20) return;
+        }
+      };
+      if (this.awaitRegister) {
+        return { keys: [...this.buffer], register: this.register, count: this._countVal(), next: ['<char>'], awaiting: 'register' };
+      }
+      if (this.awaitingCharFor) {
+        return { keys: [...this.buffer], register: this.register, count: this._countVal(), next: ['<char>'], awaiting: this.awaitingCharFor };
+      }
+      if (this.runtimeMode === 'insert') addNode(this.commandNode);
+      else {
+        addNode(this.commandNode);
+        addNode(this.motionNode);
+        addNode(this.operatorNode);
+        addNode(this.selfNode);
+        addNode(this.textObjNode);
+      }
+      return {
+        keys: [...this.buffer],
+        register: this.register,
+        count: this._countVal(),
+        opCount: this._opCountVal(),
+        next,
+        awaiting: this.haveOperator ? 'motion' : (this.buffer.length ? 'command' : null),
+      };
+    }
+
     _getCommandRoot() {
       return this.commandsRootByMode[this.runtimeMode] || this.commandsRootByMode['normal'];
     }
@@ -139,6 +176,12 @@
     feed(token) {
       token = this.settings.tokenAliases?.[token] || token;
       const out = this._feed(token);
+      // Bound synchronous loops and text expansion, including multiplied counts.
+      const total = out.countSemantic ? out.count : (out.count || 1) * (out.opCount || 1);
+      if (!Number.isFinite(total) || total > 10000) {
+        this.reset();
+        return { kind: 'invalid', reason: 'Count exceeds 10000' };
+      }
       return out;
     }
 
@@ -154,7 +197,8 @@
           return { kind: 'invalid' };
         }
       }
-      if (!this.buffer.length && settings.allowRegisterPrefix && token === (settings.registerPrefix || '"')) {
+      if (!this.haveOperator && !this.mappingStarted && !this.awaitingCharFor &&
+          this.register == null && settings.allowRegisterPrefix && token === (settings.registerPrefix || '"')) {
         this.awaitRegister = true; this.buffer.push(token);
         return { kind: 'prefix', keys: [...this.buffer] };
       }
@@ -393,6 +437,7 @@
   async function loadMotionsConfig() {
     const url = API.runtime.getURL('motions.json');
     const res = await fetch(url, { cache: 'no-cache' });
+    if (!res.ok) throw new Error('Could not load bundled motions configuration');
     return res.json();
   }
 

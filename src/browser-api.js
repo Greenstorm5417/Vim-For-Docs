@@ -1,190 +1,31 @@
-/**
- * Browser API Manager
- * 
- * This module provides a unified interface for browser APIs across 
- * different browsers (Chrome and Firefox).
- */
-
-// Detect browser environment
+// UI storage adapter: Firefox promises and Chrome callbacks share one interface.
 const browserAPI = (() => {
-  // Firefox uses the 'browser' namespace, Chrome uses 'chrome'
-  const api = typeof browser !== 'undefined' ? browser : chrome;
-  
-  // Check if we're in a Firefox environment (Promise-based API)
   const isFirefox = typeof browser !== 'undefined';
+  const api = isFirefox ? browser : chrome;
 
-  /**
-   * Wraps Chrome's callback-based API to return a Promise
-   * @param {Object} obj - The Chrome API object (e.g., chrome.storage.sync)
-   * @param {string} method - The method name to wrap (e.g., 'get')
-   * @param {...any} args - Arguments to pass to the method
-   * @returns {Promise} A promise that resolves with the result
-   */
-  const chromeAPIAsPromise = (obj, method, ...args) => {
+  async function call(area, method, argument) {
+    if (isFirefox) return api.storage[area][method](argument);
     return new Promise((resolve, reject) => {
-      obj[method](...args, (result) => {
-        if (chrome.runtime.lastError) {
-          reject(chrome.runtime.lastError);
-        } else {
-          resolve(result);
-        }
+      api.storage[area][method](argument, result => {
+        const error = api.runtime.lastError;
+        if (error) reject(error);
+        else resolve(result);
       });
     });
-  };
-
-  const storageSync = {
-    /**
-     * Get data from sync storage
-     * @param {string|Array|Object} keys - Keys to get from storage
-     * @returns {Promise} Promise resolving with storage data
-     */
-    get: (keys) => {
-      if (isFirefox) {
-        return api.storage.sync.get(keys);
-      } else {
-        return chromeAPIAsPromise(api.storage.sync, 'get', keys);
-      }
-    },
-
-    /**
-     * Save data to sync storage
-     * @param {Object} data - Data to store
-     * @returns {Promise} Promise resolving when data is stored
-     */
-    set: (data) => {
-      if (isFirefox) {
-        return api.storage.sync.set(data);
-      } else {
-        return chromeAPIAsPromise(api.storage.sync, 'set', data);
-      }
-    },
-    remove: (keys) => {
-      if (isFirefox) {
-        return api.storage.sync.remove(keys);
-      } else {
-        return chromeAPIAsPromise(api.storage.sync, 'remove', keys);
-      }
-    }
-  };
-
-  const storageLocal = {
-    /**
-     * Get data from local storage
-     * @param {string|Array|Object} keys - Keys to get from storage
-     * @returns {Promise} Promise resolving with storage data
-     */
-    get: (keys) => {
-      if (isFirefox) {
-        return api.storage.local.get(keys);
-      } else {
-        return chromeAPIAsPromise(api.storage.local, 'get', keys);
-      }
-    },
-
-    /**
-     * Save data to local storage
-     * @param {Object} data - Data to store
-     * @returns {Promise} Promise resolving when data is stored
-     */
-    set: (data) => {
-      if (isFirefox) {
-        return api.storage.local.set(data);
-      } else {
-        return chromeAPIAsPromise(api.storage.local, 'set', data);
-      }
-    },
-    remove: (keys) => {
-      if (isFirefox) {
-        return api.storage.local.remove(keys);
-      } else {
-        return chromeAPIAsPromise(api.storage.local, 'remove', keys);
-      }
-    }
-  };
+  }
 
   return {
-    // Storage API (sync)
-    storage: storageSync,
-
-    // Local storage API (non-sync, larger quota)
-    storageLocal: storageLocal,
-
-    // Runtime API
-    runtime: {
-      /**
-       * Get URL for resource within extension
-       * @param {string} path - Path to resource
-       * @returns {string} Full URL to the resource
-       */
-      getURL: (path) => {
-        return api.runtime.getURL(path);
-      },
-
-      /**
-       * Add a message listener
-       * @param {Function} callback - Listener function
-       */
-      onMessage: {
-        addListener: (callback) => {
-          api.runtime.onMessage.addListener(callback);
-        },
-        removeListener: (callback) => {
-          api.runtime.onMessage.removeListener(callback);
-        }
-      },
-
-      /**
-       * Send a message
-       * @param {Object} message - Message to send
-       * @returns {Promise} Promise resolving with the response
-       */
-      sendMessage: (message) => {
-        if (isFirefox) {
-          return api.runtime.sendMessage(message);
-        } else {
-          return chromeAPIAsPromise(api.runtime, 'sendMessage', message);
-        }
-      }
+    storage: {
+      get: keys => call('sync', 'get', keys),
+      set: data => call('sync', 'set', data),
+      remove: keys => call('sync', 'remove', keys),
     },
-
-    // Tabs API
-    tabs: {
-      /**
-       * Query for tabs
-       * @param {Object} queryInfo - Query parameters
-       * @returns {Promise} Promise resolving with matching tabs
-       */
-      query: (queryInfo) => {
-        if (isFirefox) {
-          return api.tabs.query(queryInfo);
-        } else {
-          return chromeAPIAsPromise(api.tabs, 'query', queryInfo);
-        }
-      },
-
-      /**
-       * Send a message to a specific tab
-       * @param {number} tabId - ID of tab to send message to
-       * @param {Object} message - Message to send
-       * @returns {Promise} Promise resolving with the response
-       */
-      sendMessage: (tabId, message) => {
-        if (isFirefox) {
-          return api.tabs.sendMessage(tabId, message);
-        } else {
-          return chromeAPIAsPromise(api.tabs, 'sendMessage', tabId, message);
-        }
-      },
-      create: (createProperties) => {
-        if (isFirefox) {
-          return api.tabs.create(createProperties);
-        } else {
-          return chromeAPIAsPromise(api.tabs, 'create', createProperties);
-        }
-      }
-    }
+    storageLocal: {
+      get: keys => call('local', 'get', keys),
+      set: data => call('local', 'set', data),
+      remove: keys => call('local', 'remove', keys),
+    },
   };
 })();
 
-// Expose the API globally so content scripts can use it
-window.browserAPI = browserAPI; 
+window.browserAPI = browserAPI;

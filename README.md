@@ -27,7 +27,7 @@ Without these settings enabled, the extension will not function properly.
 - Customizable motions, operators, commands, and text objects via a built‑in Motions Editor.
 - Clean, non-destructive editor UX: no row deletion, IDs locked, keys edited in modals.
 - Live apply of settings and motions through storage listeners (no tabs permission).
-- Permissions: storage and clipboard writing for yank.
+- Permissions: storage and clipboard writing when explicitly using the `+` or `*` register.
 
 ## Configuration & Motions Editor
 - Open the popup → Motions Editor to customize key sequences and text object delimiters.
@@ -51,10 +51,26 @@ JSON**, the `settings` object also supports:
 - `allowCountPrefix`: set to `false` to bind digits instead of using them as counts.
 - `tokenAliases`: defaults to `{ "<C-[>": "<ESC>" }`. Set to `{}` to bind Ctrl+[ independently.
 - `cancelTokens`: keys that cancel a pending Normal/Visual sequence; defaults to `["<ESC>", "<C-C>"]`. Insert/Visual exit commands have their own editable bindings.
+- `promptSubmitTokens`: keys that submit search and Ex prompts; defaults to `["<CR>"]`.
+- `promptBackspaceTokens`: keys that erase a character in prompts; defaults to `["<BS>"]`.
 
 Operator Self sequences can be rebound independently of their operators.
 Completed normal motions run immediately: `e a` retains its usual composition
 of move-to-word-end followed by append.
+
+## Current limitations
+
+- This is a Vim-like editor layer, not a complete Vim implementation. Visual block mode, Ex substitution/ranges, and keyword completion are not implemented.
+- Search temporarily selects document text to read a whole-document snapshot, limited to 1,000,000 characters. Search itself does not edit the text.
+- Insert and Replace repeats are limited to 1,000,000 characters and 10,000 edit operations. Replace counts each overwritten grapheme as an operation; a single large text insertion counts as one operation.
+- Vertical visual motions preserve their anchor across Docs' text windows. Other visual motions are cancelled if their saved offsets become invalid. Marks and jumps resolve unique text anchors across the document; changed or repeated anchor text is rejected. Last-exit restoration after reload uses a paragraph fingerprint and rejects changed or duplicate paragraphs (up to 10,000 candidate paragraphs).
+- Multi-edit commands can require multiple native undo steps.
+- Registers are held in tab memory. The `+` and `*` registers can write to the system clipboard, but pasting from them uses the last in-memory value; the extension does not read the system clipboard.
+- IME input and native toolbar edits are not fully recorded for dot-repeat or macros. Browser- and OS-reserved shortcuts cannot always be rebound.
+
+Use a disposable document when checking unfamiliar commands. If an edit fails,
+queued keys are discarded; inspect the document before continuing. A startup
+failure leaves native typing enabled and displays a retry message.
 
 ## Help
 - A concise Help is available inside each edit modal.

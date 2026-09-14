@@ -1,7 +1,3 @@
-Below is a sample **CONTRIBUTING.md** file you can include at the root of your project repository:
-
----
-
 # Contributing to Vim-For-Docs
 
 Thank you for your interest in contributing to **Vim-For-Docs**! Your help is welcome and appreciated. This guide explains how you can contribute to the project, whether by reporting bugs, suggesting improvements, or submitting pull requests.
@@ -42,7 +38,7 @@ We welcome pull requests for bug fixes, new features, or improvements to documen
   - Use modern ES6+ syntax.
   - Write clear and concise comments where necessary.
   - Follow consistent naming conventions and code formatting.
-  - When modifying files such as `src/content.js`, `src/page_script.js`, or `src/popup.js`, keep in mind that these files interact with Chrome APIs and the DOM. Ensure your changes are well-tested.
+  - When modifying files such as `src/content.js`, `src/executor.js`, or `src/ui/popup.js`, keep in mind that these files interact with browser APIs and the DOM. Ensure your changes are well-tested.
 
 - **HTML/CSS:**  
   - Follow semantic HTML practices.
@@ -58,10 +54,10 @@ We welcome pull requests for bug fixes, new features, or improvements to documen
 Below is a brief overview of the key directories and files:
 
 - **`src/content.js`** – Contains the main logic for handling Vim-like commands and mode indicators.
-- **`src/index.html`** – The popup interface for the extension.
-- **`src/keybinds.html`** – A reference page listing the keybindings.
-- **`src/page_script.js`** – Injected into the active document to simulate key events.
-- **`src/popup.js`** – Manages settings from the extension’s popup and communicates with the content script.
+- **`src/ui/index.html`** – The popup interface for the extension.
+- **`src/ui/commands.html`** – A searchable command reference.
+- **`src/executor.js`** – Executes commands against the Docs editor.
+- **`src/ui/popup.js`** – Manages settings from the extension’s popup and communicates with the content script.
 
 Understanding the project structure will help you locate the relevant parts of the code when making changes.
 
@@ -72,7 +68,7 @@ To test changes locally:
 1. **Load the Extension in Chrome:**
    - Open Chrome and navigate to `chrome://extensions/`.
    - Enable "Developer mode."
-   - Click "Load unpacked" and select the root directory of your project.
+   - Click "Load unpacked" and select the project's `src/` directory.
 2. **Try Out the Features:**
    - Open Google Docs and test the Vim-like motions.
    - Use the popup interface to change settings (e.g., themes, debug mode).
@@ -95,5 +91,3 @@ We appreciate your contributions and feedback. If you have any questions or need
 Happy coding!
 
 ---
-
-You can adjust or extend these guidelines based on the needs of your project. Enjoy contributing!

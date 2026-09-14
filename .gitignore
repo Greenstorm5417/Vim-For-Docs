@@ -1,3 +1,7 @@
 /assets/
 /line number stuff/
 /neovim/
+
+# Local release planning; not part of the extension or release commit.
+/AUDIT-3.0.md
+/ROADMAP.md

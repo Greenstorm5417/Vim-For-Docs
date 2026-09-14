@@ -2,11 +2,16 @@
   "manifest_version": 3,
   "name": "Vim-For-Docs",
   "description": "An implementation of Vim motions for Google Docs",
-  "version": "2.8",
+  "version": "3.0",
+  "minimum_chrome_version": "97",
   "permissions": ["storage", "clipboardWrite"],
   "browser_specific_settings": {
     "gecko": {
-      "id": "greenstorm@vimfordocs.org"
+      "id": "greenstorm@vimfordocs.org",
+      "strict_min_version": "125.0",
+      "data_collection_permissions": {
+        "required": ["none"]
+      }
     }
   },
   "icons": {
@@ -44,7 +49,7 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": ["page_script.js", "browser-api.js", "motions.json"],
+      "resources": ["motions.json"],
       "matches": ["https://docs.google.com/*"]
     }
   ]

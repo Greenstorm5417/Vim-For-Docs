@@ -4,48 +4,58 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing release tag to upload
+        required: true
+        type: string
 
 jobs:
   process-release:
     runs-on: ubuntu-latest
     environment: Extension Publish
+    timeout-minutes: 30
+    concurrency:
+      group: extension-store-upload
+      cancel-in-progress: false
     permissions:
       contents: read
 
     steps:
-      - name: Ensure tools (jq, curl) are available
+      - name: Ensure tools (jq, curl, unzip) are available
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq curl
+          sudo apt-get install -y jq curl unzip
 
-      - name: Download Vim-For-Docs.zip from latest release
+      - name: Download and validate the selected release asset
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ github.event.release.id }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
         run: |
           set -euo pipefail
-          ASSET_URL=$(curl -s -H "Authorization: token ${GITHUB_TOKEN}" \
-            "https://api.github.com/repos/${{ github.repository }}/releases/latest" | \
-            jq -r '.assets[] | select(.name == "Vim-For-Docs.zip") | .browser_download_url')
-
-          if [ -z "$ASSET_URL" ] || [ "$ASSET_URL" = "null" ]; then
-            echo "Could not find Vim-For-Docs.zip on the latest release."
-            exit 1
+          if [[ ! "$RELEASE_TAG" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            echo "Invalid release tag" >&2; exit 1
           fi
-
-          echo "Downloading from: $ASSET_URL"
-          curl -L -o Vim-For-Docs.zip "$ASSET_URL"
-
-          echo "Downloaded file details:"
-          ls -lh Vim-For-Docs.zip
-
-      - name: Set up Node.js (for Actions that require Node)
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
+          if [ -n "$RELEASE_ID" ]; then
+            RELEASE_PATH="releases/$RELEASE_ID"
+          else
+            RELEASE_PATH="releases/tags/$RELEASE_TAG"
+          fi
+          ASSET_URL=$(curl --fail --silent --show-error --connect-timeout 15 --max-time 120 \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/${RELEASE_PATH}" | \
+            jq -er '[.assets[] | select(.name == "Vim-For-Docs.zip")] | if length == 1 then .[0].url else error("Expected exactly one release ZIP") end')
+          curl --fail --silent --show-error --location --connect-timeout 15 --max-time 120 \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "Accept: application/octet-stream" \
+            -o Vim-For-Docs.zip "$ASSET_URL"
+          unzip -t Vim-For-Docs.zip
+          VERSION=$(unzip -p Vim-For-Docs.zip manifest.json | jq -er '.version')
+          test "$VERSION" = "${RELEASE_TAG#v}"
 
       - name: Upload to Chrome Web Store (no publish)
-        continue-on-error: true
-        uses: mnao305/chrome-extension-upload@v5.0.0
+        uses: mnao305/chrome-extension-upload@4008e29e13c144d0f6725462cbd49b7c291b4928 # v5.0.0
         with:
           file-path: Vim-For-Docs.zip
           extension-id: ${{ secrets.EXTENSION_ID }}
@@ -55,8 +65,7 @@ jobs:
           publish: false
 
       - name: Upload to Firefox Add-ons
-        continue-on-error: true
-        uses: cardinalby/webext-buildtools-firefox-addons-action@v1
+        uses: cardinalby/webext-buildtools-firefox-addons-action@987e338100095280ec8daf942e5640aeb55d3647 # v1
         with:
           zipFilePath: 'Vim-For-Docs.zip'
           extensionId: 'greenstorm@vimfordocs.org'

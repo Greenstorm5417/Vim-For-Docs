@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "settings": {
     "allowRegisterPrefix": true,
     "registerPrefix": "\"",
@@ -149,12 +149,12 @@
     { "id": "insert_autocomplete_prev", "keys": ["<C-P>"], "modes": ["insert"] },
     { "id": "insert_register", "keys": ["<C-R>","<char>"], "modes": ["insert"], "args": [{"name":"char","type":"char"}] },
     { "id": "insert_temp_normal", "keys": ["<C-O>"], "modes": ["insert"] },
-    { "id": "search_forward", "keys": ["/"], "modes": ["normal"] },
-    { "id": "search_backward", "keys": ["?"], "modes": ["normal"] },
+    { "id": "search_forward", "keys": ["/"], "modes": ["normal"], "acceptsCount": true },
+    { "id": "search_backward", "keys": ["?"], "modes": ["normal"], "acceptsCount": true },
     { "id": "search_next", "keys": ["n"], "modes": ["normal"], "acceptsCount": true },
     { "id": "search_prev", "keys": ["N"], "modes": ["normal"], "acceptsCount": true },
-    { "id": "search_word_forward", "keys": ["*"], "modes": ["normal"] },
-    { "id": "search_word_backward", "keys": ["#"], "modes": ["normal"] },
+    { "id": "search_word_forward", "keys": ["*"], "modes": ["normal"], "acceptsCount": true },
+    { "id": "search_word_backward", "keys": ["#"], "modes": ["normal"], "acceptsCount": true },
     { "id": "set_mark", "keys": ["m","<char>"], "modes": ["normal"], "args": [{"name":"char","type":"char"}] },
     { "id": "jump_mark", "keys": ["`","<char>"], "modes": ["normal"], "args": [{"name":"char","type":"char"}] },
     { "id": "jump_prev_pos", "keys": ["`","`"], "modes": ["normal"] },
@@ -166,6 +166,16 @@
     { "id": "change_next", "keys": ["g",","], "modes": ["normal"] },
     { "id": "change_prev", "keys": ["g",";"], "modes": ["normal"] },
     { "id": "increment", "keys": ["<C-A>"], "modes": ["normal"], "acceptsCount": true },
-    { "id": "decrement", "keys": ["<C-X>"], "modes": ["normal"], "acceptsCount": true }
+    { "id": "decrement", "keys": ["<C-X>"], "modes": ["normal"], "acceptsCount": true },
+    { "id": "visual_reselect", "keys": ["g", "v"], "modes": ["normal", "visual", "visualLine"] },
+    { "id": "macro_record", "keys": ["q", "<char>"], "modes": ["normal"], "args": [{"name":"char","type":"char"}] },
+    { "id": "macro_play", "keys": ["@", "<char>"], "modes": ["normal"], "args": [{"name":"char","type":"char"}], "acceptsCount": true },
+    { "id": "macro_repeat", "keys": ["@", "@"], "modes": ["normal"], "acceptsCount": true },
+    { "id": "surround_delete", "keys": ["g", "s", "d", "<char>"], "modes": ["normal"], "args": [{"name":"char","type":"char"}] },
+    { "id": "surround_change", "keys": ["g", "s", "c", "<char>"], "modes": ["normal"], "args": [{"name":"char","type":"char"}] },
+    { "id": "surround_word", "keys": ["g", "s", "w", "<char>"], "modes": ["normal"], "args": [{"name":"char","type":"char"}] },
+    { "id": "surround_WORD", "keys": ["g", "s", "W", "<char>"], "modes": ["normal"], "args": [{"name":"char","type":"char"}] },
+    { "id": "visual_surround", "keys": ["S", "<char>"], "modes": ["visual", "visualLine"], "args": [{"name":"char","type":"char"}] },
+    { "id": "ex_command", "keys": [":"], "modes": ["normal"] }
   ]
 }

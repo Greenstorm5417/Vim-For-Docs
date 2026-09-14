@@ -70,11 +70,10 @@
       border: 1px solid var(--border-color);
       border-radius: 4px;
       background-color: #fff;
-      outline: none;
       font-size: 14px;
     }
     .help-row td { text-align: center; padding-top: 12px; border-top: 1px solid var(--border-color); }
-    .actions-row { display: flex; justify-content: center; gap: 8px; padding-top: 8px; }
+    .actions-row { display: flex; justify-content: center; gap: 8px; padding-top: 8px; flex-wrap: wrap; }
     .btn { padding: 8px 12px; border: 1px solid var(--border-color); border-radius: 6px; background: #fff; cursor: pointer; font-size: 14px; color: #333; text-decoration: none; display: inline-block; }
     .btn:hover { background: var(--hover-bg); }
     /* Updated Help Link styling: Title with chevron */
@@ -110,6 +109,8 @@
     a:hover {
       text-decoration: underline;
     }
+    .status { margin: 8px 0 0; font-size: 13px; }
+    .status.err { color: #c5221f; }
     /* Toggle switch styling */
     .switch {
       position: relative;
@@ -150,6 +151,10 @@
     .switch input:checked + .slider:before {
       transform: translateX(16px);
     }
+    .switch input:focus-visible + .slider {
+      outline: 2px solid var(--primary-color);
+      outline-offset: 3px;
+    }
   </style>
 </head>
 <body>
@@ -171,6 +176,8 @@
     </div>
   </div>
 
+  <div id="status" class="status" role="status" aria-live="polite"></div>
+
   <div class="section">
     <h2 class="section-title">Options</h2>
     <table>
@@ -180,7 +187,7 @@
         </td>
         <td>
           <label class="switch">
-            <input type="checkbox" id="switch1" name="switch1">
+            <input type="checkbox" id="switch1" name="switch1" disabled>
             <span class="slider"></span>
           </label>
         </td>
@@ -191,7 +198,7 @@
         </td>
         <td>
           <label class="switch">
-            <input type="checkbox" id="lineNumbersSwitch" name="lineNumbersSwitch">
+            <input type="checkbox" id="lineNumbersSwitch" name="lineNumbersSwitch" disabled>
             <span class="slider"></span>
           </label>
         </td>
@@ -202,7 +209,7 @@
           <label for="dropdown">Select a Theme</label>
         </td>
         <td>
-          <select id="dropdown" name="dropdown">
+          <select id="dropdown" name="dropdown" disabled>
             <option value="">--Choose an option--</option>
           </select>
         </td>
@@ -213,6 +220,7 @@
             <a class="btn" href="https://vim.rtorr.com/" target="_blank" rel="noopener noreferrer">Help</a>
             <a class="btn" href="advanced.html">Advanced Settings</a>
             <button class="btn" id="openMotionsEditor">Motions Editor</button>
+            <button class="btn" id="openCommandList">Command List</button>
           </div>
         </td>
       </tr>
